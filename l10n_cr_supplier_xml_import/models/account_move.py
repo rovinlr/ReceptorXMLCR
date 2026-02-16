@@ -182,12 +182,12 @@ class AccountMove(models.Model):
             if not code:
                 continue
             tax = False
-            for candidate_field in ("l10n_cr_edi_code", "tax_code", "code"):
+            for candidate_field in ("fr_tax_rate_code_iva", "l10n_cr_edi_code", "tax_code", "code"):
                 if candidate_field in tax_model._fields:
                     tax = tax_model.search(
                         [
                             (candidate_field, "=", code),
-                            ("type_tax_use", "in", ["purchase", "none"]),
+                            ("type_tax_use", "=", "purchase"),
                             *self._company_domain(tax_model, company),
                         ],
                         limit=1,
@@ -219,12 +219,27 @@ class AccountMove(models.Model):
 
     @api.model
     def _attachment_raw_payload(self, attachment):
+        if "raw" in attachment._fields and attachment.raw:
+            return attachment.raw if isinstance(attachment.raw, bytes) else attachment.raw.encode()
+
         datas = attachment.datas
+        if not datas and "db_datas" in attachment._fields:
+            datas = attachment.db_datas
         if not datas:
             return b""
         if isinstance(datas, str):
             datas = datas.encode()
         return base64.b64decode(datas)
+
+    @api.model
+    def _is_supported_supplier_xml_payload(self, payload):
+        if not payload:
+            return False
+        try:
+            xml_root = etree.fromstring(payload)
+        except Exception:
+            return False
+        return etree.QName(xml_root).localname in {"FacturaElectronica", "NotaCreditoElectronica"}
 
     def _message_and_move_attachments_for_xml_import(self):
         self.ensure_one()
@@ -257,7 +272,7 @@ class AccountMove(models.Model):
 
         for attachment in attachments:
             payload = self._attachment_raw_payload(attachment)
-            if not payload:
+            if not self._is_supported_supplier_xml_payload(payload):
                 continue
             try:
                 vals = self._parse_supplier_xml(
@@ -287,20 +302,21 @@ class AccountMove(models.Model):
 
     @api.model
     def _extract_xml_attachments_from_message(self, msg_dict):
-        supported_localnames = {"FacturaElectronica", "NotaCreditoElectronica"}
         xml_candidates = []
         for attachment in msg_dict.get("attachments", []):
             if len(attachment) < 2:
                 continue
             filename, payload = attachment[0], attachment[1]
-            if not filename or not filename.lower().endswith(".xml"):
+            mimetype = attachment[2] if len(attachment) > 2 else False
+            is_xml_name = bool(filename and filename.lower().endswith(".xml"))
+            is_xml_mimetype = mimetype in {"text/xml", "application/xml"}
+            if not is_xml_name and not is_xml_mimetype:
                 continue
-            try:
-                xml_root = etree.fromstring(payload)
-            except Exception:
+            if isinstance(payload, str):
+                payload = payload.encode()
+            if not self._is_supported_supplier_xml_payload(payload):
                 continue
-            if etree.QName(xml_root).localname in supported_localnames:
-                xml_candidates.append((filename, payload))
+            xml_candidates.append((filename, payload))
         return xml_candidates
 
     def _import_xml_from_message_attachments(self, msg_dict):
@@ -311,9 +327,9 @@ class AccountMove(models.Model):
         xml_attachments = self._extract_xml_attachments_from_message(msg_dict)
         if not xml_attachments:
             for attachment in self._message_and_move_attachments_for_xml_import():
-                if not attachment.name:
-                    continue
-                xml_attachments.append((attachment.name, self._attachment_raw_payload(attachment)))
+                payload = self._attachment_raw_payload(attachment)
+                if self._is_supported_supplier_xml_payload(payload):
+                    xml_attachments.append((attachment.name, payload))
 
         for filename, payload in xml_attachments:
             if not payload:
