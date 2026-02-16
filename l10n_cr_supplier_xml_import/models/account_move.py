@@ -11,6 +11,15 @@ class AccountMove(models.Model):
     supplier_xml_key = fields.Char(readonly=True, copy=False)
     supplier_xml_gateway_id = fields.Many2one("supplier.xml.gateway", readonly=True, copy=False)
 
+    def init(self):
+        """Backward-compatible safety for databases where module wasn't upgraded yet."""
+        self.env.cr.execute(
+            """
+            ALTER TABLE account_move
+            ADD COLUMN IF NOT EXISTS supplier_xml_gateway_id integer
+            """
+        )
+
     @api.model
     def create_from_supplier_xml(
         self,
@@ -119,12 +128,19 @@ class AccountMove(models.Model):
 
     @api.model
     def _default_expense_account(self, company):
-        account = self.env["account.account"].search(
-            [("company_id", "=", company.id), ("account_type", "=", "expense")], limit=1
-        )
+        company_domain = self._company_domain(self.env["account.account"], company)
+        account = self.env["account.account"].search(company_domain + [("account_type", "=", "expense")], limit=1)
         if not account:
             raise UserError(_("No se encontró una cuenta de gasto para crear las líneas de factura."))
         return account
+
+    @api.model
+    def _company_domain(self, model, company):
+        if "company_id" in model._fields:
+            return [("company_id", "=", company.id)]
+        if "company_ids" in model._fields:
+            return [("company_ids", "in", [company.id])]
+        return []
 
     @api.model
     def _build_invoice_lines(self, root, company):
@@ -163,7 +179,7 @@ class AccountMove(models.Model):
                         [
                             (candidate_field, "=", code),
                             ("type_tax_use", "in", ["purchase", "none"]),
-                            ("company_id", "=", company.id),
+                            *self._company_domain(tax_model, company),
                         ],
                         limit=1,
                     )
