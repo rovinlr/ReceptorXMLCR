@@ -7,6 +7,7 @@
                 <field name="name"/>
                 <field name="company_id"/>
                 <field name="journal_id"/>
+                <field name="process_emails_from_date"/>
                 <field name="alias_name"/>
                 <field name="move_count"/>
             </list>
@@ -31,9 +32,13 @@
                         <field name="name"/>
                         <field name="company_id"/>
                         <field name="journal_id"/>
-                        <field name="process_emails_from_date"/>
                     </group>
                     <group string="Correo de recepción">
+                        <field name="process_emails_from_date"/>
+                        <button name="action_process_incoming_emails"
+                                type="object"
+                                string="Revisar correos"
+                                class="oe_highlight"/>
                         <field name="alias_name"/>
                         <field name="alias_domain_id"/>
                         <field name="alias_defaults" widget="text"/>
