@@ -1,5 +1,7 @@
 # ReceptorXMLCR
 
+![Imagen del importador XML](l10n_cr_supplier_xml_import/static/description/xml_import_banner.svg)
+
 Módulo para Odoo 19 que importa XML de facturas de proveedor de Costa Rica.
 
 ## Funcionalidades

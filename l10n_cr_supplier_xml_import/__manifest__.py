@@ -11,5 +11,6 @@
         "views/supplier_xml_gateway_views.xml",
     ],
     "license": "LGPL-3",
+    "images": ["static/description/xml_import_banner.svg"],
     "application": False,
 }
