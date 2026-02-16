@@ -41,7 +41,6 @@
 
     <menuitem id="menu_supplier_xml_gateway"
               name="Buzones XML proveedor"
-              parent="account.account_menu_configuration"
               action="action_supplier_xml_gateway"
               groups="account.group_account_manager"/>
 </odoo>
