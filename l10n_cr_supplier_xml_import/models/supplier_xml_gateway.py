@@ -14,6 +14,10 @@ class SupplierXMLGateway(models.Model):
         domain="[('type', '=', 'purchase'), ('company_id', '=', company_id)]",
         help="Diario usado para las facturas importadas automáticamente desde correo.",
     )
+    process_emails_from_date = fields.Date(
+        string="Procesar correos desde",
+        help="Ignora correos con fecha anterior a este valor.",
+    )
 
     move_ids = fields.One2many("account.move", "supplier_xml_gateway_id", string="Facturas recibidas")
     move_count = fields.Integer(compute="_compute_move_count", string="Facturas recibidas")
@@ -29,6 +33,20 @@ class SupplierXMLGateway(models.Model):
         values = custom_values or {}
         values.setdefault("name", msg_dict.get("subject") or _("Correo XML proveedor"))
         record = super().message_new(msg_dict, custom_values=values)
+
+        if record.process_emails_from_date and msg_dict.get("date"):
+            email_datetime = fields.Datetime.to_datetime(msg_dict.get("date"))
+            if email_datetime and email_datetime.date() < record.process_emails_from_date:
+                record.message_post(
+                    body=_(
+                        "Correo ignorado por fecha (%s). Solo se procesan correos desde %s."
+                    )
+                    % (
+                        fields.Datetime.to_string(email_datetime),
+                        fields.Date.to_string(record.process_emails_from_date),
+                    )
+                )
+                return record
 
         xml_attachments = []
         for attachment in msg_dict.get("attachments", []):
