@@ -69,7 +69,7 @@
         <field name="res_model">res.config.settings</field>
         <field name="view_mode">form</field>
         <field name="target">current</field>
-        <field name="context">{'module': 'l10n_cr_supplier_xml_import'}</field>
+        <field name="context">{'module': 'account'}</field>
     </record>
 
     <menuitem id="menu_supplier_xml_gateway"
