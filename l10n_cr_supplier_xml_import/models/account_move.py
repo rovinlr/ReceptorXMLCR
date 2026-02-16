@@ -356,10 +356,32 @@ class AccountMove(models.Model):
     def _extract_xml_attachments_from_message(self, msg_dict):
         xml_candidates = []
         for attachment in msg_dict.get("attachments", []):
-            if len(attachment) < 2:
-                continue
-            filename, payload = attachment[0], attachment[1]
-            mimetype = attachment[2] if len(attachment) > 2 else False
+            filename = False
+            payload = b""
+            mimetype = False
+
+            if isinstance(attachment, dict):
+                filename = attachment.get("filename") or attachment.get("fname")
+                payload = attachment.get("content") or attachment.get("payload") or b""
+                mimetype = (
+                    attachment.get("mimetype")
+                    or attachment.get("content_type")
+                    or attachment.get("type")
+                )
+            elif isinstance(attachment, (list, tuple)):
+                if len(attachment) < 2:
+                    continue
+                filename, payload = attachment[0], attachment[1]
+                mimetype = attachment[2] if len(attachment) > 2 else False
+
+            if isinstance(mimetype, dict):
+                mimetype = (
+                    mimetype.get("mimetype")
+                    or mimetype.get("content_type")
+                    or mimetype.get("type")
+                    or False
+                )
+
             is_xml_name = bool(filename and filename.lower().endswith(".xml"))
             is_xml_mimetype = mimetype in {"text/xml", "application/xml"}
             is_zip_name = bool(filename and filename.lower().endswith(".zip"))
