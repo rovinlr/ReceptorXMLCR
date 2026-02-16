@@ -310,9 +310,14 @@ class AccountMove(models.Model):
 
         xml_attachments = self._extract_xml_attachments_from_message(msg_dict)
         if not xml_attachments:
-            return
+            for attachment in self._message_and_move_attachments_for_xml_import():
+                if not attachment.name:
+                    continue
+                xml_attachments.append((attachment.name, self._attachment_raw_payload(attachment)))
 
         for filename, payload in xml_attachments:
+            if not payload:
+                continue
             try:
                 vals = self._parse_supplier_xml(
                     payload,
