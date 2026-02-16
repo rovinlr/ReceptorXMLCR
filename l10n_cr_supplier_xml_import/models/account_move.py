@@ -9,13 +9,23 @@ class AccountMove(models.Model):
 
     supplier_xml_filename = fields.Char(readonly=True, copy=False)
     supplier_xml_key = fields.Char(readonly=True, copy=False)
+    supplier_xml_gateway_id = fields.Many2one("supplier.xml.gateway", readonly=True, copy=False)
 
     @api.model
-    def create_from_supplier_xml(self, xml_content, journal_id=None, company_id=None, filename=None):
+    def create_from_supplier_xml(
+        self,
+        xml_content,
+        journal_id=None,
+        company_id=None,
+        filename=None,
+        supplier_xml_gateway_id=None,
+    ):
         """Create a vendor bill or vendor credit note from Costa Rica supplier XML."""
         vals = self._parse_supplier_xml(xml_content, journal_id=journal_id, company_id=company_id)
         if filename:
             vals["supplier_xml_filename"] = filename
+        if supplier_xml_gateway_id:
+            vals["supplier_xml_gateway_id"] = supplier_xml_gateway_id
         return self.with_context(default_move_type=vals["move_type"]).create(vals)
 
     @api.model

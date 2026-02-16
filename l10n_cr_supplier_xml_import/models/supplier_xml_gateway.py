@@ -15,6 +15,15 @@ class SupplierXMLGateway(models.Model):
         help="Diario usado para las facturas importadas automáticamente desde correo.",
     )
 
+    move_ids = fields.One2many("account.move", "supplier_xml_gateway_id", string="Facturas recibidas")
+    move_count = fields.Integer(compute="_compute_move_count", string="Facturas recibidas")
+
+    @api.depends("move_ids")
+    def _compute_move_count(self):
+        for record in self:
+            record.move_count = len(record.move_ids)
+
+
     @api.model
     def message_new(self, msg_dict, custom_values=None):
         values = custom_values or {}
@@ -38,6 +47,7 @@ class SupplierXMLGateway(models.Model):
                     journal_id=record.journal_id.id or None,
                     company_id=record.company_id.id,
                     filename=filename,
+                    supplier_xml_gateway_id=record.id,
                 )
                 break
             except UserError:
@@ -48,6 +58,19 @@ class SupplierXMLGateway(models.Model):
 
         move.message_post(body=_("Factura creada automáticamente desde correo: %s") % (msg_dict.get("subject") or ""))
         return record
+
+    def action_view_received_moves(self):
+        self.ensure_one()
+        return {
+            "name": _("Facturas recibidas"),
+            "type": "ir.actions.act_window",
+            "res_model": "account.move",
+            "view_mode": "list,form",
+            "domain": [("supplier_xml_gateway_id", "=", self.id)],
+            "context": {
+                "default_move_type": "in_invoice",
+            },
+        }
 
     def _alias_get_creation_values(self):
         values = super()._alias_get_creation_values()
