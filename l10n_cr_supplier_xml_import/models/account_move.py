@@ -182,24 +182,46 @@ class AccountMove(models.Model):
         tax_ids = []
         for tax_node in line_node.xpath("./*[local-name()='Impuesto']"):
             code = self._xml_text(tax_node, ["CodigoTarifaIVA"])
-            if not code:
-                continue
-            tax = False
+            rate = self._xml_float(tax_node, ["Tarifa"], default=False)
+            tax = self._find_purchase_tax_by_code_or_rate(company=company, code=code, rate=rate)
+            if tax and tax.id not in tax_ids:
+                tax_ids.append(tax.id)
+        return tax_ids
+
+    @api.model
+    def _find_purchase_tax_by_code_or_rate(self, company, code=False, rate=False):
+        tax_model = self.env["account.tax"]
+        company_domain = self._company_domain(tax_model, company)
+
+        if code:
             for candidate_field in ("fr_tax_rate_code_iva", "l10n_cr_edi_code", "tax_code", "code"):
                 if candidate_field in tax_model._fields:
                     tax = tax_model.search(
                         [
                             (candidate_field, "=", code),
                             ("type_tax_use", "=", "purchase"),
-                            *self._company_domain(tax_model, company),
+                            *company_domain,
                         ],
                         limit=1,
                     )
                     if tax:
-                        break
-            if tax and tax.id not in tax_ids:
-                tax_ids.append(tax.id)
-        return tax_ids
+                        return tax
+
+        if rate is not False:
+            rounded_rate = round(rate, 4)
+            tax = tax_model.search(
+                [
+                    ("amount_type", "=", "percent"),
+                    ("amount", "=", rounded_rate),
+                    ("type_tax_use", "=", "purchase"),
+                    *company_domain,
+                ],
+                limit=1,
+            )
+            if tax:
+                return tax
+
+        return tax_model
 
     @api.model
     def _xml_text(self, node, path):
@@ -337,6 +359,7 @@ class AccountMove(models.Model):
 
                 self.write(
                     {
+                        "move_type": vals["move_type"],
                         "partner_id": vals["partner_id"],
                         "company_id": vals["company_id"],
                         "journal_id": vals["journal_id"],
@@ -415,6 +438,7 @@ class AccountMove(models.Model):
                 continue
 
             write_vals = {
+                "move_type": vals["move_type"],
                 "partner_id": vals["partner_id"],
                 "company_id": vals["company_id"],
                 "journal_id": vals["journal_id"],
