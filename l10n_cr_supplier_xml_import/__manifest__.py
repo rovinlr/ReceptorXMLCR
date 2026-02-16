@@ -7,6 +7,7 @@
         "security/ir.model.access.csv",
         "wizard/supplier_xml_import_wizard_views.xml",
         "views/account_move_views.xml",
+        "views/res_config_settings_views.xml",
         "views/supplier_xml_gateway_views.xml",
     ],
     "license": "LGPL-3",

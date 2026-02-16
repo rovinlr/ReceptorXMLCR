@@ -18,13 +18,15 @@ class SupplierXMLGateway(models.Model):
         domain="[('type', '=', 'purchase'), ('company_id', '=', company_id)]",
         help="Diario usado para las facturas importadas automáticamente desde correo.",
     )
-    process_emails_from_date = fields.Date(
-        string="Procesar correos desde",
-        help="Ignora correos anteriores a esta fecha al procesar XML recibidos por alias.",
-    )
-
     move_ids = fields.One2many("account.move", "supplier_xml_gateway_id", string="Facturas recibidas")
     move_count = fields.Integer(compute="_compute_move_count", string="Facturas recibidas")
+
+    @api.model
+    def _get_global_process_emails_from_date(self):
+        date_value = self.env["ir.config_parameter"].sudo().get_param(
+            "l10n_cr_supplier_xml_import.process_emails_from_date"
+        )
+        return fields.Date.to_date(date_value) if date_value else False
 
     @api.depends("move_ids")
     def _compute_move_count(self):
@@ -88,7 +90,7 @@ class SupplierXMLGateway(models.Model):
     def _process_supplier_email(self, msg_dict):
         self.ensure_one()
 
-        process_from_date = self.process_emails_from_date
+        process_from_date = self._get_global_process_emails_from_date()
         if process_from_date and msg_dict.get("date"):
             email_datetime = fields.Datetime.to_datetime(msg_dict.get("date"))
             if email_datetime and email_datetime.date() < process_from_date:

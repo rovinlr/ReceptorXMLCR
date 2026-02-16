@@ -1,0 +1,25 @@
+<odoo>
+    <record id="res_config_settings_view_form_supplier_xml" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.supplier.xml</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="account.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//app[@name='account']" position="inside">
+                <block title="Buzones XML proveedor" name="supplier_xml_gateway_settings_block">
+                    <setting string="Procesar correos desde" help="Define la fecha mínima para procesar correos entrantes con XML de proveedor.">
+                        <field name="supplier_xml_process_emails_from_date"/>
+                    </setting>
+                    <setting string="Servidor de correo" help="Servidor utilizado para la búsqueda manual de correos.">
+                        <field name="supplier_xml_mail_server_id"/>
+                        <button
+                            name="action_supplier_xml_search_emails"
+                            type="object"
+                            class="btn btn-secondary mt16"
+                            string="Buscar correos"
+                        />
+                    </setting>
+                </block>
+            </xpath>
+        </field>
+    </record>
+</odoo>
