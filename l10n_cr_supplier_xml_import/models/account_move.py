@@ -1,3 +1,4 @@
+import base64
 from lxml import etree
 
 from odoo import _, api, fields, models
@@ -214,6 +215,65 @@ class AccountMove(models.Model):
             return float(value)
         except ValueError:
             return default
+
+
+    @api.model
+    def _attachment_raw_payload(self, attachment):
+        datas = attachment.datas
+        if not datas:
+            return b""
+        if isinstance(datas, str):
+            datas = datas.encode()
+        return base64.b64decode(datas)
+
+    def action_read_supplier_xml_attachment(self):
+        self.ensure_one()
+        if self.move_type not in ("in_invoice", "in_refund"):
+            raise UserError(_("Esta acción solo aplica para facturas o notas de crédito de proveedor."))
+        if self.state != "draft":
+            raise UserError(_("Solo se puede leer XML manualmente cuando el documento está en borrador."))
+
+        xml_attachments = self.env["ir.attachment"].search(
+            [
+                ("res_model", "=", "account.move"),
+                ("res_id", "=", self.id),
+                ("name", "ilike", ".xml"),
+                ("type", "=", "binary"),
+            ],
+            order="id desc",
+        )
+        if not xml_attachments:
+            raise UserError(_("No hay adjuntos XML en este documento."))
+
+        for attachment in xml_attachments:
+            payload = self._attachment_raw_payload(attachment)
+            if not payload:
+                continue
+            try:
+                vals = self._parse_supplier_xml(
+                    payload,
+                    journal_id=self.journal_id.id or None,
+                    company_id=self.company_id.id,
+                )
+            except UserError:
+                continue
+
+            self.write(
+                {
+                    "partner_id": vals["partner_id"],
+                    "company_id": vals["company_id"],
+                    "journal_id": vals["journal_id"],
+                    "ref": vals["ref"],
+                    "invoice_date": vals["invoice_date"],
+                    "supplier_xml_key": vals["supplier_xml_key"],
+                    "supplier_xml_filename": attachment.name,
+                    "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
+                }
+            )
+            self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (attachment.name or ""))
+            return True
+
+        raise UserError(_("No se encontró un XML válido para importar en los adjuntos."))
 
     @api.model
     def _extract_xml_attachments_from_message(self, msg_dict):
