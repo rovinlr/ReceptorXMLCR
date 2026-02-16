@@ -3,12 +3,12 @@
         <field name="name">supplier.xml.gateway.tree</field>
         <field name="model">supplier.xml.gateway</field>
         <field name="arch" type="xml">
-            <tree>
+            <list>
                 <field name="name"/>
                 <field name="company_id"/>
                 <field name="journal_id"/>
                 <field name="alias_name"/>
-            </tree>
+            </list>
         </field>
     </record>
 
@@ -36,7 +36,7 @@
     <record id="action_supplier_xml_gateway" model="ir.actions.act_window">
         <field name="name">Buzones XML proveedor</field>
         <field name="res_model">supplier.xml.gateway</field>
-        <field name="view_mode">tree,form</field>
+        <field name="view_mode">list,form</field>
     </record>
 
     <menuitem id="menu_supplier_xml_gateway"
