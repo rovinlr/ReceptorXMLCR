@@ -414,6 +414,10 @@ class AccountMove(models.Model):
             xml_candidates.extend(self._extract_supported_xml_payloads(payload, filename=filename))
         return xml_candidates
 
+    @api.model
+    def _gateway_from_email_message(self, msg_dict):
+        return self.env["supplier.xml.gateway"]._gateway_from_email_message(msg_dict)
+
     def _import_xml_from_message_attachments(self, msg_dict):
         self.ensure_one()
         if self.move_type not in ("in_invoice", "in_refund"):
@@ -437,6 +441,7 @@ class AccountMove(models.Model):
             except UserError:
                 continue
 
+            gateway = self._gateway_from_email_message(msg_dict)
             write_vals = {
                 "move_type": vals["move_type"],
                 "partner_id": vals["partner_id"],
@@ -448,6 +453,8 @@ class AccountMove(models.Model):
                 "supplier_xml_filename": filename,
                 "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
             }
+            if gateway:
+                write_vals["supplier_xml_gateway_id"] = gateway.id
             self.write(write_vals)
             self.message_post(body=_("XML de proveedor leído automáticamente desde los adjuntos del correo."))
             return
