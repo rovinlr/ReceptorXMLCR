@@ -31,6 +31,7 @@
                         <field name="name"/>
                         <field name="company_id"/>
                         <field name="journal_id"/>
+                        <field name="process_emails_from_date"/>
                     </group>
                     <group string="Correo de recepción">
                         <field name="alias_name"/>
