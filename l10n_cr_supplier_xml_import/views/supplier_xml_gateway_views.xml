@@ -32,11 +32,6 @@
                         <field name="company_id"/>
                         <field name="journal_id"/>
                     </group>
-                    <group string="Correo de recepción">
-                        <field name="alias_name"/>
-                        <field name="alias_domain_id"/>
-                        <field name="alias_defaults" widget="text"/>
-                    </group>
                     <notebook>
                         <page string="Facturas recibidas">
                             <field name="move_ids" readonly="1">

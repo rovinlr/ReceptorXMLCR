@@ -13,9 +13,22 @@ class SupplierXMLGateway(models.Model):
 
     name = fields.Char(required=True, default="Buzón XML Proveedor")
     company_id = fields.Many2one("res.company", required=True, default=lambda self: self.env.company)
+
+    @api.model
+    def _default_journal_id(self):
+        configured_journal_id = self.env["ir.config_parameter"].sudo().get_param(
+            "l10n_cr_supplier_xml_import.default_purchase_journal_id"
+        )
+        if configured_journal_id and configured_journal_id.isdigit():
+            journal = self.env["account.journal"].browse(int(configured_journal_id))
+            if journal and journal.type == "purchase" and journal.company_id == self.env.company:
+                return journal.id
+        return False
+
     journal_id = fields.Many2one(
         "account.journal",
         domain="[('type', '=', 'purchase'), ('company_id', '=', company_id)]",
+        default=lambda self: self._default_journal_id(),
         help="Diario usado para las facturas importadas automáticamente desde correo.",
     )
     move_ids = fields.One2many("account.move", "supplier_xml_gateway_id", string="Facturas recibidas")

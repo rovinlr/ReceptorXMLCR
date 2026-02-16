@@ -6,6 +6,9 @@
         <field name="arch" type="xml">
             <xpath expr="//app[@name='account']" position="inside">
                 <block title="Buzones XML proveedor" name="supplier_xml_gateway_settings_block">
+                    <setting string="Diario para XML de proveedor" help="Diario de compras por defecto para facturas recibidas por XML.">
+                        <field name="supplier_xml_journal_id"/>
+                    </setting>
                     <setting string="Procesar correos desde" help="Define la fecha mínima para procesar correos entrantes con XML de proveedor.">
                         <field name="supplier_xml_process_emails_from_date"/>
                     </setting>
