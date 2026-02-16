@@ -11,10 +11,6 @@
                         class="btn-secondary"
                         invisible="move_type not in ('in_invoice', 'in_refund')"/>
             </xpath>
-            <xpath expr="//sheet//group" position="inside">
-                <field name="supplier_xml_filename" readonly="1" invisible="not supplier_xml_filename"/>
-                <field name="supplier_xml_key" readonly="1" invisible="not supplier_xml_key"/>
-            </xpath>
         </field>
     </record>
 </odoo>
