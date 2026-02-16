@@ -1,0 +1,47 @@
+<odoo>
+    <record id="view_supplier_xml_gateway_tree" model="ir.ui.view">
+        <field name="name">supplier.xml.gateway.tree</field>
+        <field name="model">supplier.xml.gateway</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="name"/>
+                <field name="company_id"/>
+                <field name="journal_id"/>
+                <field name="alias_name"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_supplier_xml_gateway_form" model="ir.ui.view">
+        <field name="name">supplier.xml.gateway.form</field>
+        <field name="model">supplier.xml.gateway</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="company_id"/>
+                        <field name="journal_id"/>
+                    </group>
+                    <group string="Correo de recepción">
+                        <field name="alias_name"/>
+                        <field name="alias_domain_id"/>
+                        <field name="alias_defaults" widget="text"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_supplier_xml_gateway" model="ir.actions.act_window">
+        <field name="name">Buzones XML proveedor</field>
+        <field name="res_model">supplier.xml.gateway</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+    <menuitem id="menu_supplier_xml_gateway"
+              name="Buzones XML proveedor"
+              parent="account.account_menu_configuration"
+              action="action_supplier_xml_gateway"
+              groups="account.group_account_manager"/>
+</odoo>
