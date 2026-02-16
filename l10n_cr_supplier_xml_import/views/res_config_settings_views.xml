@@ -10,7 +10,7 @@
                         <field name="supplier_xml_process_emails_from_date"/>
                     </setting>
                     <setting string="Servidor de correo" help="Servidor utilizado para la búsqueda manual de correos.">
-                        <field name="supplier_xml_mail_server_id"/>
+                        <field name="supplier_xml_mail_server_ref"/>
                         <button
                             name="action_supplier_xml_search_emails"
                             type="object"
