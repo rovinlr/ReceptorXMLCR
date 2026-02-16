@@ -18,9 +18,17 @@ class SupplierXMLGateway(models.Model):
         domain="[('type', '=', 'purchase'), ('company_id', '=', company_id)]",
         help="Diario usado para las facturas importadas automáticamente desde correo.",
     )
+    fetchmail_server_id = fields.Many2one(
+        "fetchmail.server",
+        string="Servidor de correo entrante",
+        domain="[('state', '=', 'done')]",
+        help="Servidor general usado para descargar correos de facturas.",
+    )
     process_emails_from_date = fields.Date(
         string="Procesar correos desde",
-        help="Ignora correos con fecha anterior a este valor.",
+        related="fetchmail_server_id.process_emails_from_date",
+        readonly=False,
+        help="Configuración general del servidor entrante: ignora correos anteriores a esta fecha.",
     )
 
     move_ids = fields.One2many("account.move", "supplier_xml_gateway_id", string="Facturas recibidas")
