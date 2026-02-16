@@ -5,6 +5,14 @@ from odoo.exceptions import UserError
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
 
+    supplier_xml_journal_id = fields.Many2one(
+        "account.journal",
+        string="Diario para XML de proveedor",
+        domain="[('type', '=', 'purchase'), ('company_id', '=', company_id)]",
+        config_parameter="l10n_cr_supplier_xml_import.default_purchase_journal_id",
+        help="Diario por defecto usado al crear facturas desde XML de proveedor.",
+    )
+
     supplier_xml_process_emails_from_date = fields.Datetime(
         string="Procesar correos desde",
         config_parameter="l10n_cr_supplier_xml_import.process_emails_from_date",

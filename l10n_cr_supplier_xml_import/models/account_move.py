@@ -112,6 +112,14 @@ class AccountMove(models.Model):
         if journal_id:
             journal = self.env["account.journal"].browse(journal_id)
         if not journal:
+            configured_journal_id = self.env["ir.config_parameter"].sudo().get_param(
+                "l10n_cr_supplier_xml_import.default_purchase_journal_id"
+            )
+            if configured_journal_id and configured_journal_id.isdigit():
+                journal = self.env["account.journal"].browse(int(configured_journal_id))
+                if journal.company_id != company or journal.type != "purchase":
+                    journal = self.env["account.journal"]
+        if not journal:
             journal = self.env["account.journal"].search(
                 [("type", "=", "purchase"), ("company_id", "=", company.id)], limit=1
             )
