@@ -70,13 +70,13 @@
     <menuitem id="menu_supplier_xml_gateway"
               name="Buzones XML proveedor"
               action="action_supplier_xml_gateway"
-              groups="account.group_account_manager"
+              groups="base.group_no_one"
               web_icon="l10n_cr_supplier_xml_import,static/description/invoice_icon.svg"/>
 
     <menuitem id="menu_supplier_xml_gateway_settings"
               name="Configuración"
               parent="menu_supplier_xml_gateway"
               action="action_supplier_xml_gateway_settings"
-              groups="account.group_account_manager"
+              groups="base.group_no_one"
               sequence="20"/>
 </odoo>
