@@ -37,7 +37,7 @@
                         <field name="process_emails_from_date"/>
                         <button name="action_process_incoming_emails"
                                 type="object"
-                                string="Revisar correos"
+                                string="Info recepción"
                                 class="oe_highlight"/>
                         <field name="alias_name"/>
                         <field name="alias_domain_id"/>

@@ -18,17 +18,9 @@ class SupplierXMLGateway(models.Model):
         domain="[('type', '=', 'purchase'), ('company_id', '=', company_id)]",
         help="Diario usado para las facturas importadas automáticamente desde correo.",
     )
-    fetchmail_server_id = fields.Many2one(
-        "fetchmail.server",
-        string="Servidor de correo entrante",
-        domain="[('state', '=', 'done')]",
-        help="Servidor general usado para descargar correos de facturas.",
-    )
     process_emails_from_date = fields.Date(
         string="Procesar correos desde",
-        related="fetchmail_server_id.process_emails_from_date",
-        readonly=False,
-        help="Configuración general del servidor entrante: ignora correos anteriores a esta fecha.",
+        help="Ignora correos anteriores a esta fecha al procesar XML recibidos por alias.",
     )
 
     move_ids = fields.One2many("account.move", "supplier_xml_gateway_id", string="Facturas recibidas")
@@ -146,20 +138,12 @@ class SupplierXMLGateway(models.Model):
 
     def action_process_incoming_emails(self):
         self.ensure_one()
-        mail_thread_model = self.env["mail.thread"].with_context(active_test=False)
-        fetch_method = getattr(mail_thread_model, "_fetch_mails", False)
-        if not fetch_method:
-            raise UserError(
-                _("No hay un recolector de correos entrantes disponible. Verifique la configuración de correo entrante.")
+        raise UserError(
+            _(
+                "Odoo 19 ya no incluye el recolector fetchmail para ejecutar una revisión manual. "
+                "Use el alias del buzón y el enrutamiento de correo entrante configurado en Ajustes > Técnico > Correo."
             )
-
-        fetch_method()
-
-        self.message_post(
-            body=_("Se ejecutó la revisión manual de correos entrantes. Fecha de referencia: %s")
-            % (fields.Date.to_string(self.process_emails_from_date) or _("sin límite"))
         )
-        return True
 
     def action_view_received_moves(self):
         self.ensure_one()

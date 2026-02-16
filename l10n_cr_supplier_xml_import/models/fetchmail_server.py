@@ -1,10 +1,5 @@
-from odoo import fields, models
+"""Compatibilidad para Odoo 19.
 
-
-class FetchmailServer(models.Model):
-    _inherit = "fetchmail.server"
-
-    process_emails_from_date = fields.Date(
-        string="Procesar correos desde",
-        help="Fecha mínima global para procesar correos de facturas de proveedor.",
-    )
+Este módulo ya no hereda fetchmail.server porque fetchmail no existe en Odoo 19.
+El archivo se conserva para evitar errores en despliegues que lo referencien.
+"""
