@@ -7,7 +7,6 @@
                 <field name="name"/>
                 <field name="company_id"/>
                 <field name="journal_id"/>
-                <field name="process_emails_from_date"/>
                 <field name="alias_name"/>
                 <field name="move_count"/>
             </list>
@@ -34,11 +33,6 @@
                         <field name="journal_id"/>
                     </group>
                     <group string="Correo de recepción">
-                        <field name="process_emails_from_date"/>
-                        <button name="action_process_incoming_emails"
-                                type="object"
-                                string="Info recepción"
-                                class="oe_highlight"/>
                         <field name="alias_name"/>
                         <field name="alias_domain_id"/>
                         <field name="alias_defaults" widget="text"/>
@@ -69,8 +63,24 @@
         <field name="view_mode">list,form</field>
     </record>
 
+    <record id="action_supplier_xml_gateway_settings" model="ir.actions.act_window">
+        <field name="name">Configuración Buzones XML proveedor</field>
+        <field name="type">ir.actions.act_window</field>
+        <field name="res_model">res.config.settings</field>
+        <field name="view_mode">form</field>
+        <field name="target">inline</field>
+        <field name="context">{'module': 'l10n_cr_supplier_xml_import'}</field>
+    </record>
+
     <menuitem id="menu_supplier_xml_gateway"
               name="Buzones XML proveedor"
               action="action_supplier_xml_gateway"
               groups="account.group_account_manager"/>
+
+    <menuitem id="menu_supplier_xml_gateway_settings"
+              name="Configuración"
+              parent="menu_supplier_xml_gateway"
+              action="action_supplier_xml_gateway_settings"
+              groups="account.group_account_manager"
+              sequence="20"/>
 </odoo>
