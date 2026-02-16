@@ -226,6 +226,24 @@ class AccountMove(models.Model):
             datas = datas.encode()
         return base64.b64decode(datas)
 
+    def _message_and_move_attachments_for_xml_import(self):
+        self.ensure_one()
+        move_attachments = self.env["ir.attachment"].search(
+            [
+                ("res_model", "=", "account.move"),
+                ("res_id", "=", self.id),
+                ("type", "=", "binary"),
+            ]
+        )
+        message_attachments = self.env["ir.attachment"].search(
+            [
+                ("res_model", "=", "mail.message"),
+                ("res_id", "in", self.message_ids.ids),
+                ("type", "=", "binary"),
+            ]
+        )
+        return (move_attachments | message_attachments).sorted(key=lambda a: a.id, reverse=True)
+
     def action_read_supplier_xml_attachment(self):
         self.ensure_one()
         if self.move_type not in ("in_invoice", "in_refund"):
@@ -233,19 +251,11 @@ class AccountMove(models.Model):
         if self.state != "draft":
             raise UserError(_("Solo se puede leer XML manualmente cuando el documento está en borrador."))
 
-        xml_attachments = self.env["ir.attachment"].search(
-            [
-                ("res_model", "=", "account.move"),
-                ("res_id", "=", self.id),
-                ("name", "ilike", ".xml"),
-                ("type", "=", "binary"),
-            ],
-            order="id desc",
-        )
-        if not xml_attachments:
-            raise UserError(_("No hay adjuntos XML en este documento."))
+        attachments = self._message_and_move_attachments_for_xml_import()
+        if not attachments:
+            raise UserError(_("No hay adjuntos en este documento o en su chatter."))
 
-        for attachment in xml_attachments:
+        for attachment in attachments:
             payload = self._attachment_raw_payload(attachment)
             if not payload:
                 continue
@@ -273,7 +283,7 @@ class AccountMove(models.Model):
             self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (attachment.name or ""))
             return True
 
-        raise UserError(_("No se encontró un XML válido para importar en los adjuntos."))
+        raise UserError(_("No se encontró un XML válido en los adjuntos del documento o del chatter."))
 
     @api.model
     def _extract_xml_attachments_from_message(self, msg_dict):
