@@ -1,4 +1,5 @@
 import base64
+from email.utils import parsedate_to_datetime
 
 from lxml import etree
 
@@ -103,16 +104,43 @@ class SupplierXMLGateway(models.Model):
                 attachment_ids=attachment_ids,
             )
 
+    @api.model
+    def _parse_email_datetime(self, msg_dict):
+        for key in ("date", "internal_date"):
+            raw_date = msg_dict.get(key)
+            if not raw_date:
+                continue
+
+            parsed_datetime = fields.Datetime.to_datetime(raw_date)
+            if parsed_datetime:
+                return parsed_datetime
+
+            if isinstance(raw_date, str):
+                try:
+                    return parsedate_to_datetime(raw_date)
+                except (TypeError, ValueError):
+                    continue
+        return False
+
     def _process_supplier_email(self, msg_dict):
         self.ensure_one()
 
         process_from_date = self._get_global_process_emails_from_date()
-        if process_from_date and msg_dict.get("date"):
-            email_datetime = fields.Datetime.to_datetime(msg_dict.get("date"))
+        if process_from_date:
+            email_datetime = self._parse_email_datetime(msg_dict)
             if email_datetime and email_datetime.date() < process_from_date:
                 self.message_post(
                     body=_("Correo ignorado por fecha (%s). Solo se procesan correos desde %s.")
                     % (fields.Datetime.to_string(email_datetime), fields.Date.to_string(process_from_date))
+                )
+                return
+            if not email_datetime:
+                self.message_post(
+                    body=_(
+                        "Correo ignorado: no se pudo determinar la fecha del mensaje y existe una fecha "
+                        "mínima de procesamiento configurada (%s)."
+                    )
+                    % fields.Date.to_string(process_from_date)
                 )
                 return
 
