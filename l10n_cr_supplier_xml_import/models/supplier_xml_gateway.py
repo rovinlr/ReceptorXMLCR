@@ -1,5 +1,5 @@
 import base64
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -47,6 +47,35 @@ class SupplierXMLGateway(models.Model):
     def _compute_move_count(self):
         for record in self:
             record.move_count = len(record.move_ids)
+
+    @api.model
+    def _email_recipients_from_message(self, msg_dict):
+        recipient_headers = []
+        for key in ("to", "cc", "recipients", "email_to"):
+            value = msg_dict.get(key)
+            if value:
+                recipient_headers.append(value)
+
+        parsed_addresses = []
+        for _, email_address in getaddresses(recipient_headers):
+            normalized_address = (email_address or "").strip().lower()
+            if normalized_address:
+                parsed_addresses.append(normalized_address)
+        return set(parsed_addresses)
+
+    @api.model
+    def _gateway_from_email_message(self, msg_dict):
+        recipients = self._email_recipients_from_message(msg_dict)
+        if not recipients:
+            return self.env["supplier.xml.gateway"]
+
+        gateways = self.search([])
+        for gateway in gateways:
+            alias_contact = (gateway.alias_id.alias_full_name or "").strip().lower() if gateway.alias_id else ""
+            if alias_contact and alias_contact in recipients:
+                return gateway
+
+        return self.env["supplier.xml.gateway"]
 
 
     @api.model
