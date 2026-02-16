@@ -26,7 +26,10 @@ class SupplierXMLGateway(models.Model):
         date_value = self.env["ir.config_parameter"].sudo().get_param(
             "l10n_cr_supplier_xml_import.process_emails_from_date"
         )
-        return fields.Date.to_date(date_value) if date_value else False
+        if not date_value:
+            return False
+        process_from_datetime = fields.Datetime.to_datetime(date_value)
+        return process_from_datetime.date() if process_from_datetime else False
 
     @api.depends("move_ids")
     def _compute_move_count(self):

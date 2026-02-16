@@ -5,7 +5,7 @@ from odoo.exceptions import UserError
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
 
-    supplier_xml_process_emails_from_date = fields.Date(
+    supplier_xml_process_emails_from_date = fields.Datetime(
         string="Procesar correos desde",
         config_parameter="l10n_cr_supplier_xml_import.process_emails_from_date",
         help="Ignora correos anteriores a esta fecha al procesar XML de facturas por correo.",
