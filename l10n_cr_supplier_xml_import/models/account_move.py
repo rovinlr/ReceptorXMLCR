@@ -214,3 +214,66 @@ class AccountMove(models.Model):
             return float(value)
         except ValueError:
             return default
+
+    @api.model
+    def _extract_xml_attachments_from_message(self, msg_dict):
+        supported_localnames = {"FacturaElectronica", "NotaCreditoElectronica"}
+        xml_candidates = []
+        for attachment in msg_dict.get("attachments", []):
+            if len(attachment) < 2:
+                continue
+            filename, payload = attachment[0], attachment[1]
+            if not filename or not filename.lower().endswith(".xml"):
+                continue
+            try:
+                xml_root = etree.fromstring(payload)
+            except Exception:
+                continue
+            if etree.QName(xml_root).localname in supported_localnames:
+                xml_candidates.append((filename, payload))
+        return xml_candidates
+
+    def _import_xml_from_message_attachments(self, msg_dict):
+        self.ensure_one()
+        if self.move_type not in ("in_invoice", "in_refund"):
+            return
+
+        xml_attachments = self._extract_xml_attachments_from_message(msg_dict)
+        if not xml_attachments:
+            return
+
+        for filename, payload in xml_attachments:
+            try:
+                vals = self._parse_supplier_xml(
+                    payload,
+                    journal_id=self.journal_id.id or None,
+                    company_id=self.company_id.id,
+                )
+            except UserError:
+                continue
+
+            write_vals = {
+                "partner_id": vals["partner_id"],
+                "company_id": vals["company_id"],
+                "journal_id": vals["journal_id"],
+                "ref": vals["ref"],
+                "invoice_date": vals["invoice_date"],
+                "supplier_xml_key": vals["supplier_xml_key"],
+                "supplier_xml_filename": filename,
+                "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
+            }
+            self.write(write_vals)
+            self.message_post(body=_("XML de proveedor leído automáticamente desde los adjuntos del correo."))
+            return
+
+    @api.model
+    def message_new(self, msg_dict, custom_values=None):
+        move = super().message_new(msg_dict, custom_values=custom_values)
+        move._import_xml_from_message_attachments(msg_dict)
+        return move
+
+    def message_update(self, msg_dict, update_vals=None):
+        result = super().message_update(msg_dict, update_vals=update_vals)
+        for move in self:
+            move._import_xml_from_message_attachments(msg_dict)
+        return result
