@@ -3,6 +3,7 @@
 Módulo para Odoo 19 que importa XML de facturas de proveedor de Costa Rica.
 
 ## Funcionalidades
+- En Odoo 19 funciona con alias de correo entrante de `mail` (sin dependencia de `fetchmail`).
 - Detecta automáticamente si el XML es:
   - `FacturaElectronica` → factura de proveedor (`in_invoice`).
   - `NotaCreditoElectronica` → nota de crédito de proveedor (`in_refund`).
