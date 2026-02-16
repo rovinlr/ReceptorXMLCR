@@ -7,7 +7,7 @@
                 <field name="name"/>
                 <field name="company_id"/>
                 <field name="journal_id"/>
-                <field name="fetchmail_server_id"/>
+                <field name="process_emails_from_date"/>
                 <field name="alias_name"/>
                 <field name="move_count"/>
             </list>
@@ -34,7 +34,6 @@
                         <field name="journal_id"/>
                     </group>
                     <group string="Correo de recepción">
-                        <field name="fetchmail_server_id"/>
                         <field name="process_emails_from_date"/>
                         <button name="action_process_incoming_emails"
                                 type="object"

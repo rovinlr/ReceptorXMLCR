@@ -96,7 +96,7 @@ class SupplierXMLGateway(models.Model):
     def _process_supplier_email(self, msg_dict):
         self.ensure_one()
 
-        process_from_date = self.fetchmail_server_id.process_emails_from_date
+        process_from_date = self.process_emails_from_date
         if process_from_date and msg_dict.get("date"):
             email_datetime = fields.Datetime.to_datetime(msg_dict.get("date"))
             if email_datetime and email_datetime.date() < process_from_date:
@@ -146,11 +146,14 @@ class SupplierXMLGateway(models.Model):
 
     def action_process_incoming_emails(self):
         self.ensure_one()
-        server = self.fetchmail_server_id.sudo()
-        if not server or server.state != "done":
-            raise UserError(_("Configure un servidor de correo entrante activo para este buzón."))
+        mail_thread_model = self.env["mail.thread"].with_context(active_test=False)
+        fetch_method = getattr(mail_thread_model, "_fetch_mails", False)
+        if not fetch_method:
+            raise UserError(
+                _("No hay un recolector de correos entrantes disponible. Verifique la configuración de correo entrante.")
+            )
 
-        server.fetch_mail()
+        fetch_method()
 
         self.message_post(
             body=_("Se ejecutó la revisión manual de correos entrantes. Fecha de referencia: %s")
