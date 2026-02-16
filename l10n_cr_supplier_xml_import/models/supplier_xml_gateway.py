@@ -1,8 +1,6 @@
 import base64
 from email.utils import parsedate_to_datetime
 
-from lxml import etree
-
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
@@ -50,26 +48,24 @@ class SupplierXMLGateway(models.Model):
         for record in self:
             record.move_count = len(record.move_ids)
 
-    @api.model
-    def _extract_localname_from_xml(self, payload):
-        try:
-            xml_root = etree.fromstring(payload)
-            return etree.QName(xml_root).localname
-        except Exception:
-            return False
 
     @api.model
     def _get_invoice_xml_attachments(self, attachments):
-        supported_localnames = {"FacturaElectronica", "NotaCreditoElectronica"}
         xml_candidates = []
+        move_model = self.env["account.move"]
 
         for attachment in attachments or []:
-            filename, payload = attachment[0], attachment[1]
-            if not filename or not filename.lower().endswith(".xml"):
+            if len(attachment) < 2:
                 continue
-            local_name = self._extract_localname_from_xml(payload)
-            if local_name in supported_localnames:
-                xml_candidates.append((filename, payload))
+            filename, payload = attachment[0], attachment[1]
+            mimetype = attachment[2] if len(attachment) > 2 else False
+            is_xml_name = bool(filename and filename.lower().endswith(".xml"))
+            is_xml_mimetype = mimetype in {"text/xml", "application/xml"}
+            is_zip_name = bool(filename and filename.lower().endswith(".zip"))
+            is_zip_mimetype = mimetype in {"application/zip", "application/x-zip-compressed"}
+            if not is_xml_name and not is_xml_mimetype and not is_zip_name and not is_zip_mimetype:
+                continue
+            xml_candidates.extend(move_model._extract_supported_xml_payloads(payload, filename=filename))
 
         return xml_candidates
 

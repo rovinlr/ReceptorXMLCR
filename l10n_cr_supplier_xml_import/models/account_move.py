@@ -1,4 +1,7 @@
 import base64
+import binascii
+import io
+import zipfile
 from lxml import etree
 
 from odoo import _, api, fields, models
@@ -241,6 +244,55 @@ class AccountMove(models.Model):
             return False
         return etree.QName(xml_root).localname in {"FacturaElectronica", "NotaCreditoElectronica"}
 
+    @api.model
+    def _normalize_attachment_payload(self, payload):
+        if payload is None:
+            return b""
+        if isinstance(payload, bytes):
+            return payload
+        if isinstance(payload, str):
+            return payload.encode()
+        return bytes(payload)
+
+    @api.model
+    def _base64_decoded_payload_if_xml(self, payload):
+        try:
+            decoded = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError):
+            return b""
+        return decoded if self._is_supported_supplier_xml_payload(decoded) else b""
+
+    @api.model
+    def _extract_supported_xml_payloads(self, payload, filename=False):
+        normalized_payload = self._normalize_attachment_payload(payload)
+        if not normalized_payload:
+            return []
+
+        xml_payloads = []
+        if self._is_supported_supplier_xml_payload(normalized_payload):
+            xml_payloads.append((filename, normalized_payload))
+
+        decoded_payload = self._base64_decoded_payload_if_xml(normalized_payload)
+        if decoded_payload:
+            xml_payloads.append((filename, decoded_payload))
+
+        is_zip_candidate = (filename or "").lower().endswith(".zip") or normalized_payload.startswith(b"PK")
+        if not is_zip_candidate:
+            return xml_payloads
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(normalized_payload)) as zip_file:
+                for xml_name in zip_file.namelist():
+                    if not xml_name.lower().endswith(".xml"):
+                        continue
+                    xml_payload = zip_file.read(xml_name)
+                    if self._is_supported_supplier_xml_payload(xml_payload):
+                        xml_payloads.append((xml_name, xml_payload))
+        except (zipfile.BadZipFile, RuntimeError, ValueError):
+            return xml_payloads
+
+        return xml_payloads
+
     def _message_and_move_attachments_for_xml_import(self):
         self.ensure_one()
         move_attachments = self.env["ir.attachment"].search(
@@ -272,31 +324,31 @@ class AccountMove(models.Model):
 
         for attachment in attachments:
             payload = self._attachment_raw_payload(attachment)
-            if not self._is_supported_supplier_xml_payload(payload):
-                continue
-            try:
-                vals = self._parse_supplier_xml(
-                    payload,
-                    journal_id=self.journal_id.id or None,
-                    company_id=self.company_id.id,
-                )
-            except UserError:
-                continue
+            xml_payloads = self._extract_supported_xml_payloads(payload, filename=attachment.name)
+            for extracted_name, extracted_payload in xml_payloads:
+                try:
+                    vals = self._parse_supplier_xml(
+                        extracted_payload,
+                        journal_id=self.journal_id.id or None,
+                        company_id=self.company_id.id,
+                    )
+                except UserError:
+                    continue
 
-            self.write(
-                {
-                    "partner_id": vals["partner_id"],
-                    "company_id": vals["company_id"],
-                    "journal_id": vals["journal_id"],
-                    "ref": vals["ref"],
-                    "invoice_date": vals["invoice_date"],
-                    "supplier_xml_key": vals["supplier_xml_key"],
-                    "supplier_xml_filename": attachment.name,
-                    "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
-                }
-            )
-            self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (attachment.name or ""))
-            return True
+                self.write(
+                    {
+                        "partner_id": vals["partner_id"],
+                        "company_id": vals["company_id"],
+                        "journal_id": vals["journal_id"],
+                        "ref": vals["ref"],
+                        "invoice_date": vals["invoice_date"],
+                        "supplier_xml_key": vals["supplier_xml_key"],
+                        "supplier_xml_filename": extracted_name or attachment.name,
+                        "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
+                    }
+                )
+                self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (extracted_name or ""))
+                return True
 
         raise UserError(_("No se encontró un XML válido en los adjuntos del documento o del chatter."))
 
@@ -310,13 +362,11 @@ class AccountMove(models.Model):
             mimetype = attachment[2] if len(attachment) > 2 else False
             is_xml_name = bool(filename and filename.lower().endswith(".xml"))
             is_xml_mimetype = mimetype in {"text/xml", "application/xml"}
-            if not is_xml_name and not is_xml_mimetype:
+            is_zip_name = bool(filename and filename.lower().endswith(".zip"))
+            is_zip_mimetype = mimetype in {"application/zip", "application/x-zip-compressed"}
+            if not is_xml_name and not is_xml_mimetype and not is_zip_name and not is_zip_mimetype:
                 continue
-            if isinstance(payload, str):
-                payload = payload.encode()
-            if not self._is_supported_supplier_xml_payload(payload):
-                continue
-            xml_candidates.append((filename, payload))
+            xml_candidates.extend(self._extract_supported_xml_payloads(payload, filename=filename))
         return xml_candidates
 
     def _import_xml_from_message_attachments(self, msg_dict):
@@ -328,8 +378,7 @@ class AccountMove(models.Model):
         if not xml_attachments:
             for attachment in self._message_and_move_attachments_for_xml_import():
                 payload = self._attachment_raw_payload(attachment)
-                if self._is_supported_supplier_xml_payload(payload):
-                    xml_attachments.append((attachment.name, payload))
+                xml_attachments.extend(self._extract_supported_xml_payloads(payload, filename=attachment.name))
 
         for filename, payload in xml_attachments:
             if not payload:
