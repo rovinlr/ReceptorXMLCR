@@ -14,6 +14,7 @@ class AccountMove(models.Model):
     supplier_xml_filename = fields.Char(readonly=True, copy=False)
     supplier_xml_key = fields.Char(readonly=True, copy=False)
     supplier_xml_gateway_id = fields.Many2one("supplier.xml.gateway", readonly=True, copy=False)
+    supplier_xml_message_id = fields.Char(readonly=True, copy=False, index=True)
 
     def init(self):
         """Backward-compatible safety for databases where module wasn't upgraded yet."""
@@ -21,6 +22,12 @@ class AccountMove(models.Model):
             """
             ALTER TABLE account_move
             ADD COLUMN IF NOT EXISTS supplier_xml_gateway_id integer
+            """
+        )
+        self.env.cr.execute(
+            """
+            ALTER TABLE account_move
+            ADD COLUMN IF NOT EXISTS supplier_xml_message_id varchar
             """
         )
 
@@ -35,11 +42,29 @@ class AccountMove(models.Model):
     ):
         """Create a vendor bill or vendor credit note from Costa Rica supplier XML."""
         vals = self._parse_supplier_xml(xml_content, journal_id=journal_id, company_id=company_id)
+        existing_move = self._find_existing_supplier_move_by_key(
+            supplier_xml_key=vals.get("supplier_xml_key"),
+            company_id=vals.get("company_id"),
+        )
+        if existing_move:
+            return existing_move
         if filename:
             vals["supplier_xml_filename"] = filename
         if supplier_xml_gateway_id:
             vals["supplier_xml_gateway_id"] = supplier_xml_gateway_id
         return self.with_context(default_move_type=vals["move_type"]).create(vals)
+
+    @api.model
+    def _find_existing_supplier_move_by_key(self, supplier_xml_key, company_id=None):
+        if not supplier_xml_key:
+            return self.env["account.move"]
+        domain = [
+            ("supplier_xml_key", "=", supplier_xml_key),
+            ("move_type", "in", ["in_invoice", "in_refund"]),
+        ]
+        if company_id:
+            domain.append(("company_id", "=", company_id))
+        return self.search(domain, limit=1)
 
     @api.model
     def _parse_supplier_xml(self, xml_content, journal_id=None, company_id=None):
