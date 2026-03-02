@@ -1,5 +1,6 @@
 import base64
 from email.utils import getaddresses, parsedate_to_datetime
+from email import message_from_string
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -97,6 +98,41 @@ class SupplierXMLGateway(models.Model):
         return self.env["supplier.xml.gateway"]
 
 
+
+    @api.model
+    def _extract_message_id_from_message(self, msg_dict):
+        direct_message_id = (msg_dict.get("message_id") or msg_dict.get("Message-Id") or "").strip()
+        if direct_message_id:
+            return direct_message_id
+
+        headers = msg_dict.get("headers")
+        if isinstance(headers, str) and headers.strip():
+            try:
+                parsed_message = message_from_string(headers)
+            except Exception:  # pragma: no cover - defensive header parsing
+                parsed_message = False
+            if parsed_message:
+                header_message_id = (parsed_message.get("Message-Id") or "").strip()
+                if header_message_id:
+                    return header_message_id
+
+        return ""
+
+    @api.model
+    def _is_duplicate_supplier_email(self, msg_dict, company_id):
+        message_id = self._extract_message_id_from_message(msg_dict)
+        if not message_id:
+            return False, ""
+        duplicate_move = self.env["account.move"].search(
+            [
+                ("supplier_xml_message_id", "=", message_id),
+                ("company_id", "=", company_id),
+                ("move_type", "in", ["in_invoice", "in_refund"]),
+            ],
+            limit=1,
+        )
+        return bool(duplicate_move), message_id
+
     @api.model
     def _get_invoice_xml_attachments(self, attachments):
         xml_candidates = []
@@ -169,6 +205,13 @@ class SupplierXMLGateway(models.Model):
     def _process_supplier_email(self, msg_dict):
         self.ensure_one()
 
+        is_duplicate_message, message_id = self._is_duplicate_supplier_email(msg_dict, self.company_id.id)
+        if is_duplicate_message:
+            self.message_post(
+                body=_("Correo omitido: Message-ID ya procesado previamente (%s).") % message_id
+            )
+            return
+
         process_from_datetime, process_to_datetime = self._get_global_process_emails_date_range()
         if process_from_datetime or process_to_datetime:
             email_datetime = self._parse_email_datetime(msg_dict)
@@ -227,6 +270,9 @@ class SupplierXMLGateway(models.Model):
 
         if not move:
             raise UserError(_("No se encontró un XML de factura o nota de crédito válido en el correo."))
+
+        if message_id:
+            move.write({"supplier_xml_message_id": message_id})
 
         self._keep_mail_attachments_on_move(move, msg_dict)
         move.message_post(body=_("Factura creada automáticamente desde correo: %s") % (msg_dict.get("subject") or ""))
