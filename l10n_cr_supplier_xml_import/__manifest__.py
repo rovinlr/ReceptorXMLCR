@@ -2,6 +2,7 @@
     "name": "Costa Rica Supplier XML Import",
     "version": "19.0.1.0.0",
     "summary": "Import supplier XML invoices and credit notes into vendor bills",
+    "author": "FenixCR Solutions",
     "depends": ["account", "mail"],
     "data": [
         "security/ir.model.access.csv",
