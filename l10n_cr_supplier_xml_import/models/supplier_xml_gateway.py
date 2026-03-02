@@ -34,13 +34,20 @@ class SupplierXMLGateway(models.Model):
     move_count = fields.Integer(compute="_compute_move_count", string="Facturas recibidas")
 
     @api.model
+    def _normalize_config_datetime(self, value):
+        """Return a datetime or False for empty/sentinel config values."""
+        if value in (False, None, "", "False", "None"):
+            return False
+        return fields.Datetime.to_datetime(value)
+
+    @api.model
     def _get_global_process_emails_date_range(self):
         icp = self.env["ir.config_parameter"].sudo()
         from_value = icp.get_param("l10n_cr_supplier_xml_import.process_emails_from_date")
         to_value = icp.get_param("l10n_cr_supplier_xml_import.process_emails_to_date")
 
-        process_from_datetime = fields.Datetime.to_datetime(from_value) if from_value else False
-        process_to_datetime = fields.Datetime.to_datetime(to_value) if to_value else False
+        process_from_datetime = self._normalize_config_datetime(from_value)
+        process_to_datetime = self._normalize_config_datetime(to_value)
 
         return process_from_datetime, process_to_datetime
 
