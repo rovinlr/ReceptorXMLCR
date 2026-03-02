@@ -1,3 +1,5 @@
+import inspect
+
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
@@ -93,16 +95,36 @@ class ResConfigSettings(models.TransientModel):
             raise UserError(_("Seleccione un servidor de correo en la configuración general."))
 
         if server._name == "fetchmail.server":
+            process_from_datetime = self.supplier_xml_process_emails_from_date
+            process_to_datetime = self.supplier_xml_process_emails_to_date
+            fetch_context = {
+                "supplier_xml_fetch_search_mode": "ALL",
+                "supplier_xml_process_emails_from_date": process_from_datetime,
+                "supplier_xml_process_emails_to_date": process_to_datetime,
+            }
             if hasattr(server, "fetch_mail"):
-                server.fetch_mail()
+                self._call_fetchmail_method(
+                    server.with_context(**fetch_context),
+                    "fetch_mail",
+                    process_from_datetime,
+                    process_to_datetime,
+                )
             else:
-                server._fetch_mails()
+                self._call_fetchmail_method(
+                    server.with_context(**fetch_context),
+                    "_fetch_mails",
+                    process_from_datetime,
+                    process_to_datetime,
+                )
             return {
                 "type": "ir.actions.client",
                 "tag": "display_notification",
                 "params": {
                     "title": _("Búsqueda completada"),
-                    "message": _("Se ejecutó la búsqueda manual de correos en el servidor %s.")
+                    "message": _(
+                        "Se ejecutó la búsqueda manual de correos en el servidor %s "
+                        "(incluye correos leídos)."
+                    )
                     % server.display_name,
                     "type": "success",
                     "sticky": False,
@@ -137,3 +159,36 @@ class ResConfigSettings(models.TransientModel):
                 "Verifique que exista el modelo fetchmail o una acción de servidor con model._fetch_mails()."
             )
         )
+
+    @api.model
+    def _call_fetchmail_method(self, server, method_name, process_from_datetime=False, process_to_datetime=False):
+        """Execute fetchmail methods with optional filters when supported.
+
+        This keeps backward compatibility with varying method signatures across
+        deployments while allowing integrations to receive explicit date/search
+        hints.
+        """
+        method = getattr(server, method_name)
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            method()
+            return
+
+        accepted_kwargs = {}
+        parameter_names = set(signature.parameters)
+
+        if "search_mode" in parameter_names:
+            accepted_kwargs["search_mode"] = "ALL"
+        if "imap_search" in parameter_names:
+            accepted_kwargs["imap_search"] = "ALL"
+        if "process_from_datetime" in parameter_names and process_from_datetime:
+            accepted_kwargs["process_from_datetime"] = process_from_datetime
+        if "process_to_datetime" in parameter_names and process_to_datetime:
+            accepted_kwargs["process_to_datetime"] = process_to_datetime
+        if "from_date" in parameter_names and process_from_datetime:
+            accepted_kwargs["from_date"] = process_from_datetime
+        if "to_date" in parameter_names and process_to_datetime:
+            accepted_kwargs["to_date"] = process_to_datetime
+
+        method(**accepted_kwargs)
