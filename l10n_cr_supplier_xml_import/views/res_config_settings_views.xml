@@ -12,6 +12,9 @@
                     <setting string="Procesar correos desde" help="Define la fecha mínima para procesar correos entrantes con XML de proveedor.">
                         <field name="supplier_xml_process_emails_from_date"/>
                     </setting>
+                    <setting string="Procesar correos hasta" help="Define la fecha máxima para procesar correos entrantes con XML de proveedor.">
+                        <field name="supplier_xml_process_emails_to_date"/>
+                    </setting>
                     <setting string="Servidor de correo" help="Servidor utilizado para la búsqueda manual de correos.">
                         <field name="supplier_xml_mail_server_ref"/>
                         <button

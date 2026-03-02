@@ -34,14 +34,15 @@ class SupplierXMLGateway(models.Model):
     move_count = fields.Integer(compute="_compute_move_count", string="Facturas recibidas")
 
     @api.model
-    def _get_global_process_emails_from_date(self):
-        date_value = self.env["ir.config_parameter"].sudo().get_param(
-            "l10n_cr_supplier_xml_import.process_emails_from_date"
-        )
-        if not date_value:
-            return False
-        process_from_datetime = fields.Datetime.to_datetime(date_value)
-        return process_from_datetime.date() if process_from_datetime else False
+    def _get_global_process_emails_date_range(self):
+        icp = self.env["ir.config_parameter"].sudo()
+        from_value = icp.get_param("l10n_cr_supplier_xml_import.process_emails_from_date")
+        to_value = icp.get_param("l10n_cr_supplier_xml_import.process_emails_to_date")
+
+        process_from_datetime = fields.Datetime.to_datetime(from_value) if from_value else False
+        process_to_datetime = fields.Datetime.to_datetime(to_value) if to_value else False
+
+        return process_from_datetime, process_to_datetime
 
     @api.depends("move_ids")
     def _compute_move_count(self):
@@ -150,22 +151,41 @@ class SupplierXMLGateway(models.Model):
     def _process_supplier_email(self, msg_dict):
         self.ensure_one()
 
-        process_from_date = self._get_global_process_emails_from_date()
-        if process_from_date:
+        process_from_datetime, process_to_datetime = self._get_global_process_emails_date_range()
+        if process_from_datetime or process_to_datetime:
             email_datetime = self._parse_email_datetime(msg_dict)
-            if email_datetime and email_datetime.date() < process_from_date:
+            if email_datetime and process_from_datetime and email_datetime < process_from_datetime:
                 self.message_post(
-                    body=_("Correo ignorado por fecha (%s). Solo se procesan correos desde %s.")
-                    % (fields.Datetime.to_string(email_datetime), fields.Date.to_string(process_from_date))
+                    body=_(
+                        "Correo ignorado por fecha (%s). Solo se procesan correos desde %s."
+                    )
+                    % (
+                        fields.Datetime.to_string(email_datetime),
+                        fields.Datetime.to_string(process_from_datetime),
+                    )
+                )
+                return
+            if email_datetime and process_to_datetime and email_datetime > process_to_datetime:
+                self.message_post(
+                    body=_("Correo ignorado por fecha (%s). Solo se procesan correos hasta %s.")
+                    % (
+                        fields.Datetime.to_string(email_datetime),
+                        fields.Datetime.to_string(process_to_datetime),
+                    )
                 )
                 return
             if not email_datetime:
+                configured_range = []
+                if process_from_datetime:
+                    configured_range.append(_("desde %s") % fields.Datetime.to_string(process_from_datetime))
+                if process_to_datetime:
+                    configured_range.append(_("hasta %s") % fields.Datetime.to_string(process_to_datetime))
                 self.message_post(
                     body=_(
                         "Correo ignorado: no se pudo determinar la fecha del mensaje y existe una fecha "
-                        "mínima de procesamiento configurada (%s)."
+                        "de procesamiento configurada (%s)."
                     )
-                    % fields.Date.to_string(process_from_date)
+                    % " ".join(configured_range)
                 )
                 return
 

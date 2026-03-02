@@ -18,6 +18,11 @@ class ResConfigSettings(models.TransientModel):
         config_parameter="l10n_cr_supplier_xml_import.process_emails_from_date",
         help="Ignora correos anteriores a esta fecha al procesar XML de facturas por correo.",
     )
+    supplier_xml_process_emails_to_date = fields.Datetime(
+        string="Procesar correos hasta",
+        config_parameter="l10n_cr_supplier_xml_import.process_emails_to_date",
+        help="Ignora correos posteriores a esta fecha al procesar XML de facturas por correo.",
+    )
     supplier_xml_mail_server_ref = fields.Reference(
         selection="_selection_supplier_xml_mail_servers",
         string="Servidor de correo",
