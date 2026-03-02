@@ -67,13 +67,24 @@ class SupplierXMLGateway(models.Model):
     @api.model
     def _gateway_from_email_message(self, msg_dict):
         recipients = self._email_recipients_from_message(msg_dict)
-        if not recipients:
-            return self.env["supplier.xml.gateway"]
+        gateways = self.search([("company_id", "=", self.env.company.id)])
 
-        gateways = self.search([])
+        if recipients:
+            for gateway in gateways:
+                alias_contact = (gateway.alias_id.alias_full_name or "").strip().lower() if gateway.alias_id else ""
+                if alias_contact and alias_contact in recipients:
+                    return gateway
+
+        configured_journal_id = self.env["ir.config_parameter"].sudo().get_param(
+            "l10n_cr_supplier_xml_import.default_purchase_journal_id"
+        )
+        if configured_journal_id and configured_journal_id.isdigit():
+            gateway = gateways.filtered(lambda gateway: gateway.journal_id.id == int(configured_journal_id))[:1]
+            if gateway:
+                return gateway
+
         for gateway in gateways:
-            alias_contact = (gateway.alias_id.alias_full_name or "").strip().lower() if gateway.alias_id else ""
-            if alias_contact and alias_contact in recipients:
+            if gateway.journal_id:
                 return gateway
 
         return self.env["supplier.xml.gateway"]
