@@ -202,11 +202,19 @@ class AccountMove(models.Model):
             line_cmds.append((0, 0, line_vals))
             line_cmds.extend(
                 self._build_other_charge_lines(
-                    line_node=line_node,
+                    parent_node=line_node,
                     default_account=default_account,
                     tax_ids=other_charges_tax_ids,
                 )
             )
+        line_cmds.extend(
+            self._build_other_charge_lines(
+                parent_node=root,
+                default_account=default_account,
+                tax_ids=other_charges_tax_ids,
+                xpath="./*[local-name()='DetalleServicio']/*[local-name()='OtrosCargos']",
+            )
+        )
         return line_cmds
 
     @api.model
@@ -227,15 +235,19 @@ class AccountMove(models.Model):
         return [tax.id] if tax else []
 
     @api.model
-    def _build_other_charge_lines(self, line_node, default_account, tax_ids=None):
+    def _build_other_charge_lines(self, parent_node, default_account, tax_ids=None, xpath="./*[local-name()='OtrosCargos']"):
         line_cmds = []
         tax_ids = tax_ids or []
-        for charge_node in line_node.xpath("./*[local-name()='OtrosCargos']"):
+        for charge_node in parent_node.xpath(xpath):
             amount = self._xml_float(charge_node, ["MontoCargo"], default=0.0)
             if amount <= 0:
                 continue
             charge_detail = self._xml_text(charge_node, ["Detalle"])
-            charge_document = self._xml_text(charge_node, ["TipoDocumento"])
+            charge_document = (
+                self._xml_text(charge_node, ["TipoDocumentoOC"])
+                or self._xml_text(charge_node, ["TipoDocumento"])
+                or self._xml_text(charge_node, ["TipoDocumentoOTROS"])
+            )
             line_name = charge_detail or _("Otros cargos")
             if charge_document:
                 line_name = _("%(line_name)s (Doc: %(doc)s)", line_name=line_name, doc=charge_document)
