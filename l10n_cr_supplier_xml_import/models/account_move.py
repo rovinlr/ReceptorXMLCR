@@ -183,6 +183,7 @@ class AccountMove(models.Model):
     def _build_invoice_lines(self, root, company):
         default_account = self._default_expense_account(company)
         line_cmds = []
+        other_charges_tax_ids = self._tax_ids_for_other_charges(company)
         for line_node in root.xpath("//*[local-name()='LineaDetalle']"):
             detail = self._xml_text(line_node, ["Detalle"])
             quantity = self._xml_float(line_node, ["Cantidad"], default=1.0)
@@ -199,6 +200,13 @@ class AccountMove(models.Model):
             if tax_ids:
                 line_vals["tax_ids"] = [(6, 0, tax_ids)]
             line_cmds.append((0, 0, line_vals))
+            line_cmds.extend(
+                self._build_other_charge_lines(
+                    line_node=line_node,
+                    default_account=default_account,
+                    tax_ids=other_charges_tax_ids,
+                )
+            )
         return line_cmds
 
     @api.model
@@ -214,12 +222,41 @@ class AccountMove(models.Model):
         return tax_ids
 
     @api.model
+    def _tax_ids_for_other_charges(self, company):
+        tax = self._find_purchase_tax_by_code_or_rate(company=company, code="10")
+        return [tax.id] if tax else []
+
+    @api.model
+    def _build_other_charge_lines(self, line_node, default_account, tax_ids=None):
+        line_cmds = []
+        tax_ids = tax_ids or []
+        for charge_node in line_node.xpath("./*[local-name()='OtrosCargos']"):
+            amount = self._xml_float(charge_node, ["MontoCargo"], default=0.0)
+            if amount <= 0:
+                continue
+            charge_detail = self._xml_text(charge_node, ["Detalle"])
+            charge_document = self._xml_text(charge_node, ["TipoDocumento"])
+            line_name = charge_detail or _("Otros cargos")
+            if charge_document:
+                line_name = _("%(line_name)s (Doc: %(doc)s)", line_name=line_name, doc=charge_document)
+            charge_line_vals = {
+                "name": line_name,
+                "quantity": 1.0,
+                "price_unit": amount,
+                "account_id": default_account.id,
+            }
+            if tax_ids:
+                charge_line_vals["tax_ids"] = [(6, 0, tax_ids)]
+            line_cmds.append((0, 0, charge_line_vals))
+        return line_cmds
+
+    @api.model
     def _find_purchase_tax_by_code_or_rate(self, company, code=False, rate=False):
         tax_model = self.env["account.tax"]
         company_domain = self._company_domain(tax_model, company)
 
         if code:
-            for candidate_field in ("fr_tax_rate_code_iva", "l10n_cr_edi_code", "tax_code", "code"):
+            for candidate_field in ("fp_tax_rate_code_iva", "fr_tax_rate_code_iva", "l10n_cr_edi_code", "tax_code", "code"):
                 if candidate_field in tax_model._fields:
                     tax = tax_model.search(
                         [
