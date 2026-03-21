@@ -212,7 +212,7 @@ class AccountMove(models.Model):
                 parent_node=root,
                 default_account=default_account,
                 tax_ids=other_charges_tax_ids,
-                xpath="./*[local-name()='DetalleServicio']/*[local-name()='OtrosCargos']",
+                xpath="./*[local-name()='OtrosCargos'] | ./*[local-name()='DetalleServicio']/*[local-name()='OtrosCargos']",
             )
         )
         return line_cmds
