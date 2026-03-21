@@ -97,11 +97,13 @@ class ResConfigSettings(models.TransientModel):
         if server._name == "fetchmail.server":
             process_from_datetime = self.supplier_xml_process_emails_from_date
             process_to_datetime = self.supplier_xml_process_emails_to_date
-            fetch_context = {
-                "supplier_xml_fetch_search_mode": "ALL",
-                "supplier_xml_process_emails_from_date": process_from_datetime,
-                "supplier_xml_process_emails_to_date": process_to_datetime,
-            }
+            fetch_context = self._fetchmail_search_all_hints()
+            fetch_context.update(
+                {
+                    "supplier_xml_process_emails_from_date": process_from_datetime,
+                    "supplier_xml_process_emails_to_date": process_to_datetime,
+                }
+            )
             if hasattr(server, "fetch_mail"):
                 self._call_fetchmail_method(
                     server.with_context(**fetch_context),
@@ -178,10 +180,10 @@ class ResConfigSettings(models.TransientModel):
         accepted_kwargs = {}
         parameter_names = set(signature.parameters)
 
-        if "search_mode" in parameter_names:
-            accepted_kwargs["search_mode"] = "ALL"
-        if "imap_search" in parameter_names:
-            accepted_kwargs["imap_search"] = "ALL"
+        search_all_hints = self._fetchmail_search_all_hints()
+        for param_name, param_value in search_all_hints.items():
+            if param_name in parameter_names:
+                accepted_kwargs[param_name] = param_value
         if "process_from_datetime" in parameter_names and process_from_datetime:
             accepted_kwargs["process_from_datetime"] = process_from_datetime
         if "process_to_datetime" in parameter_names and process_to_datetime:
@@ -191,4 +193,26 @@ class ResConfigSettings(models.TransientModel):
         if "to_date" in parameter_names and process_to_datetime:
             accepted_kwargs["to_date"] = process_to_datetime
 
-        method(**accepted_kwargs)
+        method_ctx = server.with_context(**search_all_hints)
+        getattr(method_ctx, method_name)(**accepted_kwargs)
+
+    @api.model
+    def _fetchmail_search_all_hints(self):
+        """Hints reused across signature/context styles to include read emails.
+
+        Distintos forks de fetchmail usan nombres de parámetros diferentes para
+        limitar a mensajes no leídos. Este mapa centralizado permite forzar
+        búsqueda completa (ALL) sin acoplarse a una sola implementación.
+        """
+        return {
+            "supplier_xml_fetch_search_mode": "ALL",
+            "search_mode": "ALL",
+            "imap_search": "ALL",
+            "fetchmail_search_criterion": "ALL",
+            "search_criterion": "ALL",
+            "criteria": "ALL",
+            "only_unread": False,
+            "unread_only": False,
+            "seen": True,
+            "include_seen": True,
+        }
