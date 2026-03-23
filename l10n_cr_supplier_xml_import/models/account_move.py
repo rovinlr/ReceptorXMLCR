@@ -2,6 +2,8 @@ import base64
 import binascii
 import io
 import zipfile
+from email import policy
+from email.parser import BytesParser
 from lxml import etree
 
 from odoo import _, api, fields, models
@@ -359,7 +361,7 @@ class AccountMove(models.Model):
         return decoded if self._is_supported_supplier_xml_payload(decoded) else b""
 
     @api.model
-    def _extract_supported_xml_payloads(self, payload, filename=False):
+    def _extract_supported_xml_payloads(self, payload, filename=False, allow_email_container=True):
         normalized_payload = self._normalize_attachment_payload(payload)
         if not normalized_payload:
             return []
@@ -373,20 +375,54 @@ class AccountMove(models.Model):
             xml_payloads.append((filename, decoded_payload))
 
         is_zip_candidate = (filename or "").lower().endswith(".zip") or normalized_payload.startswith(b"PK")
-        if not is_zip_candidate:
-            return xml_payloads
+        if is_zip_candidate:
+            try:
+                with zipfile.ZipFile(io.BytesIO(normalized_payload)) as zip_file:
+                    for xml_name in zip_file.namelist():
+                        if not xml_name.lower().endswith(".xml"):
+                            continue
+                        xml_payload = zip_file.read(xml_name)
+                        if self._is_supported_supplier_xml_payload(xml_payload):
+                            xml_payloads.append((xml_name, xml_payload))
+            except (zipfile.BadZipFile, RuntimeError, ValueError):
+                pass
 
+        if allow_email_container and self._looks_like_email_container(normalized_payload, filename=filename):
+            xml_payloads.extend(
+                self._extract_xml_payloads_from_email_container(normalized_payload, filename=filename)
+            )
+
+        return xml_payloads
+
+    @api.model
+    def _looks_like_email_container(self, payload, filename=False):
+        lower_name = (filename or "").lower()
+        if lower_name.endswith(".eml") or lower_name.endswith(".msg"):
+            return True
+        return payload.lstrip().startswith(b"Return-Path:") or payload.lstrip().startswith(b"Received:")
+
+    @api.model
+    def _extract_xml_payloads_from_email_container(self, payload, filename=False):
         try:
-            with zipfile.ZipFile(io.BytesIO(normalized_payload)) as zip_file:
-                for xml_name in zip_file.namelist():
-                    if not xml_name.lower().endswith(".xml"):
-                        continue
-                    xml_payload = zip_file.read(xml_name)
-                    if self._is_supported_supplier_xml_payload(xml_payload):
-                        xml_payloads.append((xml_name, xml_payload))
-        except (zipfile.BadZipFile, RuntimeError, ValueError):
-            return xml_payloads
+            email_message = BytesParser(policy=policy.default).parsebytes(payload)
+        except Exception:
+            return []
 
+        xml_payloads = []
+        for part in email_message.walk():
+            if part.is_multipart():
+                continue
+            part_payload = part.get_payload(decode=True)
+            if not part_payload:
+                continue
+            part_filename = part.get_filename() or filename
+            xml_payloads.extend(
+                self._extract_supported_xml_payloads(
+                    part_payload,
+                    filename=part_filename,
+                    allow_email_container=False,
+                )
+            )
         return xml_payloads
 
     def _message_and_move_attachments_for_xml_import(self):
