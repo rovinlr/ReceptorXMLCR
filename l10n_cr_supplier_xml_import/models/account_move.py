@@ -221,15 +221,54 @@ class AccountMove(models.Model):
 
     @api.model
     def _tax_ids_from_line(self, line_node, company):
-        tax_model = self.env["account.tax"]
         tax_ids = []
         for tax_node in line_node.xpath("./*[local-name()='Impuesto']"):
             code = self._xml_text(tax_node, ["CodigoTarifaIVA"])
             rate = self._xml_float(tax_node, ["Tarifa"], default=False)
-            tax = self._find_purchase_tax_by_code_or_rate(company=company, code=code, rate=rate)
+            tax = self._find_exonerated_purchase_tax(company=company, tax_node=tax_node, code=code)
+            if not tax:
+                tax = self._find_purchase_tax_by_code_or_rate(company=company, code=code, rate=rate)
             if tax and tax.id not in tax_ids:
                 tax_ids.append(tax.id)
         return tax_ids
+
+    @api.model
+    def _find_exonerated_purchase_tax(self, company, tax_node, code):
+        exoneration_node = tax_node.xpath("./*[local-name()='Exoneracion']")
+        if not exoneration_node:
+            return self.env["account.tax"]
+
+        tax_amount = self._xml_float(tax_node, ["Monto"], default=0.0)
+        exonerated_amount = self._xml_float(tax_node, ["Exoneracion", "MontoExoneracion"], default=0.0)
+        is_fully_exonerated = tax_amount <= 0.0 or abs(tax_amount - exonerated_amount) < 0.0001
+        if not is_fully_exonerated:
+            return self.env["account.tax"]
+
+        tax = self._find_purchase_tax_by_code_and_amount(company=company, code=code, amount=0.0)
+        if tax:
+            return tax
+        return self._find_purchase_tax_by_code_and_amount(company=company, code="10", amount=0.0)
+
+    @api.model
+    def _find_purchase_tax_by_code_and_amount(self, company, code, amount):
+        tax_model = self.env["account.tax"]
+        company_domain = self._company_domain(tax_model, company)
+        rounded_amount = round(amount, 4)
+        for candidate_field in ("fp_tax_rate_code_iva", "fr_tax_rate_code_iva", "l10n_cr_edi_code", "tax_code", "code"):
+            if candidate_field not in tax_model._fields:
+                continue
+            tax = tax_model.search(
+                [
+                    (candidate_field, "=", code),
+                    ("type_tax_use", "=", "purchase"),
+                    ("amount", "=", rounded_amount),
+                    *company_domain,
+                ],
+                limit=1,
+            )
+            if tax:
+                return tax
+        return tax_model
 
     @api.model
     def _tax_ids_for_other_charges(self, company):
