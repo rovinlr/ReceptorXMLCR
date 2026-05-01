@@ -188,6 +188,7 @@ class AccountMove(models.Model):
         default_account = self._default_expense_account(company)
         line_cmds = []
         other_charges_tax_ids = self._tax_ids_for_other_charges(company)
+        seen_other_charge_nodes = set()
         for line_node in root.xpath("//*[local-name()='LineaDetalle']"):
             detail = self._xml_text(line_node, ["Detalle"])
             quantity = self._xml_float(line_node, ["Cantidad"], default=1.0)
@@ -209,6 +210,7 @@ class AccountMove(models.Model):
                     parent_node=line_node,
                     default_account=default_account,
                     tax_ids=other_charges_tax_ids,
+                    seen_nodes=seen_other_charge_nodes,
                 )
             )
         line_cmds.extend(
@@ -217,20 +219,22 @@ class AccountMove(models.Model):
                 default_account=default_account,
                 tax_ids=other_charges_tax_ids,
                 xpath="./*[local-name()='OtrosCargos'] | ./*[local-name()='DetalleServicio']/*[local-name()='OtrosCargos']",
+                seen_nodes=seen_other_charge_nodes,
             )
         )
         return line_cmds
 
     @api.model
     def _line_net_price_unit(self, line_node, quantity):
-        """Use net amounts from XML so discount is not duplicated in Odoo."""
+        """Use net taxable base from XML to avoid duplicating VAT in Odoo totals."""
         subtotal = self._xml_float(line_node, ["SubTotal"], default=False)
         total_line = self._xml_float(line_node, ["MontoTotalLinea"], default=False)
         if quantity and quantity > 0:
-            if total_line is not False:
-                return total_line / quantity
             if subtotal is not False:
                 return subtotal / quantity
+            # Fallback only when SubTotal is missing; MontoTotalLinea can include VAT.
+            if total_line is not False:
+                return total_line / quantity
         return self._xml_float(line_node, ["PrecioUnitario"], default=0.0)
 
     @api.model
@@ -298,10 +302,22 @@ class AccountMove(models.Model):
         return [tax.id] if tax else []
 
     @api.model
-    def _build_other_charge_lines(self, parent_node, default_account, tax_ids=None, xpath="./*[local-name()='OtrosCargos']"):
+    def _build_other_charge_lines(
+        self,
+        parent_node,
+        default_account,
+        tax_ids=None,
+        xpath="./*[local-name()='OtrosCargos']",
+        seen_nodes=None,
+    ):
         line_cmds = []
         tax_ids = tax_ids or []
+        seen_nodes = seen_nodes if seen_nodes is not None else set()
         for charge_node in parent_node.xpath(xpath):
+            node_identifier = id(charge_node)
+            if node_identifier in seen_nodes:
+                continue
+            seen_nodes.add(node_identifier)
             amount = self._xml_float(charge_node, ["MontoCargo"], default=0.0)
             if amount <= 0:
                 continue
