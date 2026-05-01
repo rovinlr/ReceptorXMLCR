@@ -92,12 +92,14 @@ class AccountMove(models.Model):
         lines = self._build_invoice_lines(root, company)
         if not lines:
             raise UserError(_("El XML no tiene líneas de detalle para importar."))
+        currency = self._currency_from_xml(root, company)
 
         return {
             "move_type": move_type,
             "company_id": company.id,
             "journal_id": journal.id,
             "partner_id": partner.id,
+            "currency_id": currency.id,
             "ref": self._xml_text(root, ["NumeroConsecutivo"]) or self._xml_text(root, ["Clave"]),
             "invoice_date": self._parse_invoice_date(self._xml_text(root, ["FechaEmision"])),
             "supplier_xml_key": self._xml_text(root, ["Clave"]),
@@ -189,7 +191,7 @@ class AccountMove(models.Model):
         for line_node in root.xpath("//*[local-name()='LineaDetalle']"):
             detail = self._xml_text(line_node, ["Detalle"])
             quantity = self._xml_float(line_node, ["Cantidad"], default=1.0)
-            price_unit = self._xml_float(line_node, ["PrecioUnitario"], default=0.0)
+            price_unit = self._line_net_price_unit(line_node=line_node, quantity=quantity)
 
             tax_ids = self._tax_ids_from_line(line_node, company)
 
@@ -218,6 +220,26 @@ class AccountMove(models.Model):
             )
         )
         return line_cmds
+
+    @api.model
+    def _line_net_price_unit(self, line_node, quantity):
+        """Use net amounts from XML so discount is not duplicated in Odoo."""
+        subtotal = self._xml_float(line_node, ["SubTotal"], default=False)
+        total_line = self._xml_float(line_node, ["MontoTotalLinea"], default=False)
+        if quantity and quantity > 0:
+            if total_line is not False:
+                return total_line / quantity
+            if subtotal is not False:
+                return subtotal / quantity
+        return self._xml_float(line_node, ["PrecioUnitario"], default=0.0)
+
+    @api.model
+    def _currency_from_xml(self, root, company):
+        currency_code = self._xml_text(root, ["ResumenFactura", "CodigoTipoMoneda", "CodigoMoneda"]) or "CRC"
+        currency = self.env["res.currency"].search([("name", "=", currency_code)], limit=1)
+        if not currency:
+            return company.currency_id
+        return currency
 
     @api.model
     def _tax_ids_from_line(self, line_node, company):
