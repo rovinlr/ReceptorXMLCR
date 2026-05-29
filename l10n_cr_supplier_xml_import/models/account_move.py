@@ -80,6 +80,7 @@ class AccountMove(models.Model):
 
         company = self.env["res.company"].browse(company_id) if company_id else self.env.company
         self._validate_receiver(root, company)
+        currency = self._currency_from_xml(root, company)
 
         emisor_name = self._xml_text(root, ["Emisor", "Nombre"])
         emisor_vat = self._normalize_identification(self._xml_text(root, ["Emisor", "Identificacion", "Numero"]))
@@ -92,7 +93,6 @@ class AccountMove(models.Model):
         lines = self._build_invoice_lines(root, company)
         if not lines:
             raise UserError(_("El XML no tiene líneas de detalle para importar."))
-        currency = self._currency_from_xml(root, company)
 
         return {
             "move_type": move_type,
@@ -239,11 +239,55 @@ class AccountMove(models.Model):
 
     @api.model
     def _currency_from_xml(self, root, company):
-        currency_code = self._xml_text(root, ["ResumenFactura", "CodigoTipoMoneda", "CodigoMoneda"]) or "CRC"
-        currency = self.env["res.currency"].search([("name", "=", currency_code)], limit=1)
-        if not currency:
+        currency_code = self._currency_code_from_xml(root)
+        if not currency_code:
             return company.currency_id
+
+        currency = self.env["res.currency"].with_context(active_test=False).search(
+            [("name", "=", currency_code)],
+            limit=1,
+        )
+        if not currency:
+            raise UserError(
+                _(
+                    "El XML indica la moneda %(currency_code)s, pero esa moneda no existe en Odoo. "
+                    "Debe crearla o corregir la configuración antes de importar el XML."
+                )
+                % {"currency_code": currency_code}
+            )
+        if "active" in currency._fields and not currency.active:
+            raise UserError(
+                _(
+                    "El XML indica la moneda %(currency_code)s, pero esa moneda está inactiva en Odoo. "
+                    "Actívela en Contabilidad > Configuración > Monedas antes de importar el XML."
+                )
+                % {"currency_code": currency_code}
+            )
         return currency
+
+    @api.model
+    def _currency_code_from_xml(self, root):
+        currency_code = self._xml_text(root, ["ResumenFactura", "CodigoTipoMoneda", "CodigoMoneda"])
+        if not currency_code:
+            currency_code = self._xml_text(root, ["ResumenFactura", "CodigoMoneda"])
+        return (currency_code or "CRC").strip().upper()
+
+    @api.model
+    def _supplier_xml_move_write_vals(self, vals, filename=False):
+        write_vals = {
+            "move_type": vals["move_type"],
+            "partner_id": vals["partner_id"],
+            "company_id": vals["company_id"],
+            "journal_id": vals["journal_id"],
+            "currency_id": vals["currency_id"],
+            "ref": vals["ref"],
+            "invoice_date": vals["invoice_date"],
+            "supplier_xml_key": vals["supplier_xml_key"],
+            "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
+        }
+        if filename:
+            write_vals["supplier_xml_filename"] = filename
+        return write_vals
 
     @api.model
     def _tax_ids_from_line(self, line_node, company):
@@ -544,19 +588,7 @@ class AccountMove(models.Model):
                 except UserError:
                     continue
 
-                self.write(
-                    {
-                        "move_type": vals["move_type"],
-                        "partner_id": vals["partner_id"],
-                        "company_id": vals["company_id"],
-                        "journal_id": vals["journal_id"],
-                        "ref": vals["ref"],
-                        "invoice_date": vals["invoice_date"],
-                        "supplier_xml_key": vals["supplier_xml_key"],
-                        "supplier_xml_filename": extracted_name or attachment.name,
-                        "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
-                    }
-                )
+                self.write(self._supplier_xml_move_write_vals(vals, filename=extracted_name or attachment.name))
                 self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (extracted_name or ""))
                 return True
 
@@ -629,17 +661,7 @@ class AccountMove(models.Model):
                 continue
 
             gateway = self._gateway_from_email_message(msg_dict)
-            write_vals = {
-                "move_type": vals["move_type"],
-                "partner_id": vals["partner_id"],
-                "company_id": vals["company_id"],
-                "journal_id": vals["journal_id"],
-                "ref": vals["ref"],
-                "invoice_date": vals["invoice_date"],
-                "supplier_xml_key": vals["supplier_xml_key"],
-                "supplier_xml_filename": filename,
-                "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
-            }
+            write_vals = self._supplier_xml_move_write_vals(vals, filename=filename)
             if gateway:
                 write_vals["supplier_xml_gateway_id"] = gateway.id
             self.write(write_vals)
