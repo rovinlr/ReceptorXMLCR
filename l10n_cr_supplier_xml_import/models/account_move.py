@@ -5,6 +5,7 @@ import zipfile
 from email import policy
 from email.parser import BytesParser
 from lxml import etree
+from markupsafe import Markup
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -18,20 +19,57 @@ class AccountMove(models.Model):
     supplier_xml_gateway_id = fields.Many2one("supplier.xml.gateway", readonly=True, copy=False)
     supplier_xml_message_id = fields.Char(readonly=True, copy=False, index=True)
 
-    def init(self):
-        """Backward-compatible safety for databases where module wasn't upgraded yet."""
-        self.env.cr.execute(
-            """
-            ALTER TABLE account_move
-            ADD COLUMN IF NOT EXISTS supplier_xml_gateway_id integer
-            """
+    @api.model
+    def _get_safe_xml_parser(self):
+        """Hardened lxml parser for untrusted supplier XML (arrives via email).
+
+        Disables external entity resolution, network access and oversized trees
+        to prevent XXE / SSRF / billion-laughs attacks.
+        """
+        return etree.XMLParser(
+            resolve_entities=False,
+            no_network=True,
+            huge_tree=False,
+            load_dtd=False,
+            dtd_validation=False,
         )
-        self.env.cr.execute(
-            """
-            ALTER TABLE account_move
-            ADD COLUMN IF NOT EXISTS supplier_xml_message_id varchar
-            """
+
+    @api.model
+    def _parse_supplier_xml_root(self, xml_content):
+        try:
+            return etree.fromstring(xml_content, parser=self._get_safe_xml_parser())
+        except Exception as error:
+            raise UserError(_("No se pudo leer el XML adjunto: %s") % error) from error
+
+    def _post_supplier_xml_checks(self, move, root, warnings):
+        """Post a chatter note when the imported totals/taxes do not match the XML.
+
+        Surfaces silent inconsistencies (unmapped taxes, total mismatch) instead
+        of leaving a vendor bill that quietly differs from the legal document.
+        """
+        move.ensure_one()
+        messages = list(warnings or [])
+
+        xml_total = self._xml_float(root, ["ResumenFactura", "TotalComprobante"], default=False)
+        if xml_total is not False and move.currency_id and move.currency_id.compare_amounts(
+            move.amount_total, xml_total
+        ) != 0:
+            messages.append(
+                _(
+                    "El total registrado (%(odoo)s) no coincide con el total del XML "
+                    "(%(xml)s). Revise impuestos o líneas antes de validar.",
+                    odoo=move.amount_total,
+                    xml=xml_total,
+                )
+            )
+
+        if not messages:
+            return
+        body = Markup("<p>%s</p><ul>%s</ul>") % (
+            _("Avisos al importar el XML de proveedor:"),
+            Markup("").join(Markup("<li>%s</li>") % message for message in messages),
         )
+        move.message_post(body=body)
 
     @api.model
     def create_from_supplier_xml(
@@ -43,7 +81,11 @@ class AccountMove(models.Model):
         supplier_xml_gateway_id=None,
     ):
         """Create a vendor bill or vendor credit note from Costa Rica supplier XML."""
-        vals = self._parse_supplier_xml(xml_content, journal_id=journal_id, company_id=company_id)
+        root = self._parse_supplier_xml_root(xml_content)
+        warnings = []
+        vals = self._parse_supplier_xml(
+            xml_content, journal_id=journal_id, company_id=company_id, root=root, warnings=warnings
+        )
         existing_move = self._find_existing_supplier_move_by_key(
             supplier_xml_key=vals.get("supplier_xml_key"),
             company_id=vals.get("company_id"),
@@ -54,7 +96,9 @@ class AccountMove(models.Model):
             vals["supplier_xml_filename"] = filename
         if supplier_xml_gateway_id:
             vals["supplier_xml_gateway_id"] = supplier_xml_gateway_id
-        return self.with_context(default_move_type=vals["move_type"]).create(vals)
+        move = self.with_context(default_move_type=vals["move_type"]).create(vals)
+        self._post_supplier_xml_checks(move, root, warnings)
+        return move
 
     @api.model
     def _find_existing_supplier_move_by_key(self, supplier_xml_key, company_id=None):
@@ -69,11 +113,9 @@ class AccountMove(models.Model):
         return self.search(domain, limit=1)
 
     @api.model
-    def _parse_supplier_xml(self, xml_content, journal_id=None, company_id=None):
-        try:
-            root = etree.fromstring(xml_content)
-        except Exception as error:
-            raise UserError(_("No se pudo leer el XML adjunto: %s") % error) from error
+    def _parse_supplier_xml(self, xml_content, journal_id=None, company_id=None, root=None, warnings=None):
+        if root is None:
+            root = self._parse_supplier_xml_root(xml_content)
 
         local_name = etree.QName(root).localname
         move_type = self._get_move_type_from_xml(local_name)
@@ -90,7 +132,7 @@ class AccountMove(models.Model):
         partner = self._find_or_create_supplier(emisor_name, emisor_vat)
         journal = self._get_purchase_journal(journal_id=journal_id, company=company)
 
-        lines = self._build_invoice_lines(root, company)
+        lines = self._build_invoice_lines(root, company, warnings=warnings)
         if not lines:
             raise UserError(_("El XML no tiene líneas de detalle para importar."))
 
@@ -184,7 +226,7 @@ class AccountMove(models.Model):
         return []
 
     @api.model
-    def _build_invoice_lines(self, root, company):
+    def _build_invoice_lines(self, root, company, warnings=None):
         default_account = self._default_expense_account(company)
         line_cmds = []
         other_charges_tax_ids = self._tax_ids_for_other_charges(company)
@@ -194,7 +236,7 @@ class AccountMove(models.Model):
             quantity = self._xml_float(line_node, ["Cantidad"], default=1.0)
             price_unit = self._line_net_price_unit(line_node=line_node, quantity=quantity)
 
-            tax_ids = self._tax_ids_from_line(line_node, company)
+            tax_ids = self._tax_ids_from_line(line_node, company, warnings=warnings, line_label=detail)
 
             line_vals = {
                 "name": detail or _("Línea importada desde XML"),
@@ -290,7 +332,7 @@ class AccountMove(models.Model):
         return write_vals
 
     @api.model
-    def _tax_ids_from_line(self, line_node, company):
+    def _tax_ids_from_line(self, line_node, company, warnings=None, line_label=False):
         tax_ids = []
         for tax_node in line_node.xpath("./*[local-name()='Impuesto']"):
             code = self._xml_text(tax_node, ["CodigoTarifaIVA"])
@@ -300,6 +342,16 @@ class AccountMove(models.Model):
                 tax = self._find_purchase_tax_by_code_or_rate(company=company, code=code, rate=rate)
             if tax and tax.id not in tax_ids:
                 tax_ids.append(tax.id)
+            elif not tax and warnings is not None and (code or rate is not False):
+                warnings.append(
+                    _(
+                        "No se encontró un impuesto de compra para la línea «%(line)s» "
+                        "(código tarifa %(code)s, tarifa %(rate)s%%). Se importó sin ese impuesto.",
+                        line=line_label or _("(sin detalle)"),
+                        code=code or _("n/d"),
+                        rate=rate if rate is not False else _("n/d"),
+                    )
+                )
         return tax_ids
 
     @api.model
@@ -458,7 +510,7 @@ class AccountMove(models.Model):
         if not payload:
             return False
         try:
-            xml_root = etree.fromstring(payload)
+            xml_root = etree.fromstring(payload, parser=self._get_safe_xml_parser())
         except Exception:
             return False
         return etree.QName(xml_root).localname in {"FacturaElectronica", "NotaCreditoElectronica"}
@@ -580,16 +632,21 @@ class AccountMove(models.Model):
             xml_payloads = self._extract_supported_xml_payloads(payload, filename=attachment.name)
             for extracted_name, extracted_payload in xml_payloads:
                 try:
+                    root = self._parse_supplier_xml_root(extracted_payload)
+                    warnings = []
                     vals = self._parse_supplier_xml(
                         extracted_payload,
                         journal_id=self.journal_id.id or None,
                         company_id=self.company_id.id,
+                        root=root,
+                        warnings=warnings,
                     )
                 except UserError:
                     continue
 
                 self.write(self._supplier_xml_move_write_vals(vals, filename=extracted_name or attachment.name))
                 self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (extracted_name or ""))
+                self._post_supplier_xml_checks(self, root, warnings)
                 return True
 
         raise UserError(_("No se encontró un XML válido en los adjuntos del documento o del chatter."))
@@ -641,6 +698,10 @@ class AccountMove(models.Model):
         self.ensure_one()
         if self.move_type not in ("in_invoice", "in_refund"):
             return
+        # Avoid wiping a bill that was already imported or manually edited: only
+        # auto-import on a still-draft document that has not been filled from XML yet.
+        if self.state != "draft" or self.supplier_xml_key:
+            return
 
         xml_attachments = self._extract_xml_attachments_from_message(msg_dict)
         if not xml_attachments:
@@ -652,10 +713,14 @@ class AccountMove(models.Model):
             if not payload:
                 continue
             try:
+                root = self._parse_supplier_xml_root(payload)
+                warnings = []
                 vals = self._parse_supplier_xml(
                     payload,
                     journal_id=self.journal_id.id or None,
                     company_id=self.company_id.id,
+                    root=root,
+                    warnings=warnings,
                 )
             except UserError:
                 continue
@@ -664,8 +729,12 @@ class AccountMove(models.Model):
             write_vals = self._supplier_xml_move_write_vals(vals, filename=filename)
             if gateway:
                 write_vals["supplier_xml_gateway_id"] = gateway.id
+            message_id = self.env["supplier.xml.gateway"]._extract_message_id_from_message(msg_dict)
+            if message_id and not self.supplier_xml_message_id:
+                write_vals["supplier_xml_message_id"] = message_id
             self.write(write_vals)
             self.message_post(body=_("XML de proveedor leído automáticamente desde los adjuntos del correo."))
+            self._post_supplier_xml_checks(self, root, warnings)
             return
 
     @api.model

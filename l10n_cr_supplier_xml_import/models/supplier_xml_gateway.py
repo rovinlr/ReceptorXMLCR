@@ -1,6 +1,8 @@
 import base64
+from datetime import timezone
 from email.utils import getaddresses, parsedate_to_datetime
 from email import message_from_string
+from markupsafe import Markup
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -75,13 +77,17 @@ class SupplierXMLGateway(models.Model):
     @api.model
     def _gateway_from_email_message(self, msg_dict):
         recipients = self._email_recipients_from_message(msg_dict)
-        gateways = self.search([("company_id", "=", self.env.company.id)])
-
+        # Match by recipient alias across all companies first: the alias uniquely
+        # identifies the right mailbox/company, so do not pre-filter by env.company
+        # (which is unreliable inside cron/mail-gateway context, multi-company).
+        all_gateways = self.search([])
         if recipients:
-            for gateway in gateways:
+            for gateway in all_gateways:
                 alias_contact = (gateway.alias_id.alias_full_name or "").strip().lower() if gateway.alias_id else ""
                 if alias_contact and alias_contact in recipients:
                     return gateway
+
+        gateways = all_gateways.filtered(lambda gateway: gateway.company_id.id == self.env.company.id)
 
         configured_journal_id = self.env["ir.config_parameter"].sudo().get_param(
             "l10n_cr_supplier_xml_import.default_purchase_journal_id"
@@ -185,6 +191,17 @@ class SupplierXMLGateway(models.Model):
             )
 
     @api.model
+    def _to_naive_utc(self, value):
+        """Normalize to naive UTC so it is comparable with config datetimes.
+
+        Email ``Date`` headers parse to tz-aware datetimes, while Odoo config
+        datetimes are naive UTC; comparing both directly raises TypeError.
+        """
+        if value and value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    @api.model
     def _parse_email_datetime(self, msg_dict):
         for key in ("date", "internal_date"):
             raw_date = msg_dict.get(key)
@@ -192,14 +209,14 @@ class SupplierXMLGateway(models.Model):
                 continue
 
             parsed_datetime = fields.Datetime.to_datetime(raw_date)
-            if parsed_datetime:
-                return parsed_datetime
-
-            if isinstance(raw_date, str):
+            if not parsed_datetime and isinstance(raw_date, str):
                 try:
-                    return parsedate_to_datetime(raw_date)
+                    parsed_datetime = parsedate_to_datetime(raw_date)
                 except (TypeError, ValueError):
-                    continue
+                    parsed_datetime = False
+
+            if parsed_datetime:
+                return self._to_naive_utc(parsed_datetime)
         return False
 
     def _process_supplier_email(self, msg_dict):
@@ -252,9 +269,20 @@ class SupplierXMLGateway(models.Model):
 
         xml_attachments = self._get_invoice_xml_attachments(msg_dict.get("attachments", []))
         if not xml_attachments:
-            raise UserError(_("El correo no contiene XML de factura o nota de crédito para procesar."))
+            # A supplier may email a plain PDF (not an electronic invoice) with no
+            # XML. That is legitimate: do not raise (which would abort/lose the
+            # email); just leave a trace and stop.
+            self.message_post(
+                body=_(
+                    "Correo recibido sin XML de factura electrónica (por ejemplo, solo PDF). "
+                    "No se creó ninguna factura automáticamente. Asunto: %s"
+                )
+                % (msg_dict.get("subject") or "")
+            )
+            return
 
         move = False
+        import_errors = []
         for filename, payload in xml_attachments:
             try:
                 move = self.env["account.move"].create_from_supplier_xml(
@@ -265,13 +293,30 @@ class SupplierXMLGateway(models.Model):
                     supplier_xml_gateway_id=self.id,
                 )
                 break
-            except UserError:
+            except UserError as error:
+                error_text = error.args[0] if error.args else str(error)
+                import_errors.append((filename or _("XML"), error_text))
                 continue
 
         if not move:
-            raise UserError(_("No se encontró un XML de factura o nota de crédito válido en el correo."))
+            # Surface the real reason(s) instead of a generic message, and keep
+            # the email rather than aborting it.
+            if import_errors:
+                detail = Markup("").join(
+                    Markup("<li>%s: %s</li>") % (name, reason) for name, reason in import_errors
+                )
+                body = Markup("<p>%s</p><ul>%s</ul>") % (
+                    _("No se pudo crear la factura desde el XML del correo:"),
+                    detail,
+                )
+            else:
+                body = Markup("<p>%s</p>") % _(
+                    "No se encontró un XML de factura o nota de crédito válido en el correo."
+                )
+            self.message_post(body=body)
+            return
 
-        if message_id:
+        if message_id and not move.supplier_xml_message_id:
             move.write({"supplier_xml_message_id": message_id})
 
         self._keep_mail_attachments_on_move(move, msg_dict)
