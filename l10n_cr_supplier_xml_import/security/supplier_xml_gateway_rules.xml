@@ -1,0 +1,8 @@
+<odoo>
+    <record id="supplier_xml_gateway_company_rule" model="ir.rule">
+        <field name="name">Buzón XML proveedor: multi-compañía</field>
+        <field name="model_id" ref="model_supplier_xml_gateway"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

@@ -132,7 +132,7 @@ class AccountMove(models.Model):
         partner = self._find_or_create_supplier(emisor_name, emisor_vat)
         journal = self._get_purchase_journal(journal_id=journal_id, company=company)
 
-        lines = self._build_invoice_lines(root, company, warnings=warnings)
+        lines = self._build_invoice_lines(root, company, partner=partner, warnings=warnings)
         if not lines:
             raise UserError(_("El XML no tiene líneas de detalle para importar."))
 
@@ -218,6 +218,32 @@ class AccountMove(models.Model):
         return account
 
     @api.model
+    @api.model
+    def _predicted_expense_account(self, label, partner, company, default_account):
+        """Reuse Odoo's account prediction (per supplier + line label).
+
+        Odoo predicts the account only through the Label onchange in the UI, which
+        never fires on programmatic import. We call it explicitly so imported bills
+        land on the account historically used for that supplier/detail, and fall
+        back to the default expense account when there is no history or the API is
+        unavailable. Never let prediction break the import.
+        """
+        if not label or not partner:
+            return default_account
+        line_model = self.env["account.move.line"].with_company(company)
+        if not hasattr(line_model, "_predict_account"):
+            return default_account
+        try:
+            predicted = line_model._predict_account(label, partner)
+        except Exception:  # noqa: BLE001 - prediction must never abort the import
+            return default_account
+        if isinstance(predicted, int):
+            predicted = self.env["account.account"].browse(predicted) if predicted else self.env["account.account"]
+        if predicted and predicted.exists() and not getattr(predicted, "deprecated", False):
+            return predicted
+        return default_account
+
+    @api.model
     def _company_domain(self, model, company):
         if "company_id" in model._fields:
             return [("company_id", "=", company.id)]
@@ -226,7 +252,7 @@ class AccountMove(models.Model):
         return []
 
     @api.model
-    def _build_invoice_lines(self, root, company, warnings=None):
+    def _build_invoice_lines(self, root, company, partner=None, warnings=None):
         default_account = self._default_expense_account(company)
         line_cmds = []
         other_charges_tax_ids = self._tax_ids_for_other_charges(company)
@@ -237,12 +263,13 @@ class AccountMove(models.Model):
             price_unit = self._line_net_price_unit(line_node=line_node, quantity=quantity)
 
             tax_ids = self._tax_ids_from_line(line_node, company, warnings=warnings, line_label=detail)
+            account = self._predicted_expense_account(detail, partner, company, default_account)
 
             line_vals = {
                 "name": detail or _("Línea importada desde XML"),
                 "quantity": quantity,
                 "price_unit": price_unit,
-                "account_id": default_account.id,
+                "account_id": account.id,
             }
             if tax_ids:
                 line_vals["tax_ids"] = [(6, 0, tax_ids)]
