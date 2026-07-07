@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from lxml import etree
 
 from odoo.exceptions import UserError
@@ -138,6 +140,34 @@ class TestSupplierXmlImport(SupplierXmlCommon):
             any("No se encontró un impuesto de compra" in (m.body or "") for m in move.message_ids),
             "Debe avisar cuando un impuesto del XML no se pudo mapear.",
         )
+
+    # ------------------------------------------------------------------ #
+    # Account prediction (per supplier / line detail)
+    # ------------------------------------------------------------------ #
+    def test_predicted_account_fallback_without_history(self):
+        # A brand-new partner has no history -> the default expense account.
+        partner = self.env["res.partner"].create({"name": "Sin historial"})
+        default = self.move_model._default_expense_account(self.env.company)
+        account = self.move_model._predicted_expense_account(
+            "Servicio de prueba", partner, self.env.company, default
+        )
+        self.assertEqual(account, default)
+
+    def test_predicted_account_is_used_on_import(self):
+        default = self.move_model._default_expense_account(self.env.company)
+        other = self.env["account.account"].search(
+            [("account_type", "=", "expense"), ("id", "!=", default.id)], limit=1
+        )
+        if not other:
+            self.skipTest("Se necesita más de una cuenta de gasto para probar la predicción.")
+
+        line_model_cls = type(self.env["account.move.line"])
+        with patch.object(line_model_cls, "_predict_account", create=True, return_value=other.id):
+            move = self.move_model.create_from_supplier_xml(
+                xml_content=factura_xml(clave="PREDICT-1"),
+                company_id=self.env.company.id,
+            )
+        self.assertEqual(move.invoice_line_ids.account_id, other)
 
     def test_invoice_without_lines_raises(self):
         empty = (
