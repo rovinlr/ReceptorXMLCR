@@ -203,9 +203,15 @@ class AccountMove(models.Model):
             country_code = self._xml_text(root, ["Emisor", "Telefono", "CodigoPais"])
             vals["phone"] = "+%s %s" % (country_code, phone_number) if country_code else phone_number
 
+        # l10n_cr_einvoice generates Ubicacion/OtrasSenas from partner.street,
+        # so importing it into street keeps both modules symmetric.
         other_address = self._xml_text(root, ["Emisor", "Ubicacion", "OtrasSenas"])
         if other_address:
             vals["street"] = other_address
+
+        neighborhood = self._xml_text(root, ["Emisor", "Ubicacion", "Barrio"])
+        if neighborhood and "fp_neighborhood_code" in partner_model._fields:
+            vals["fp_neighborhood_code"] = neighborhood[:64]
 
         country = self.env.ref("base.cr", raise_if_not_found=False)
         if country:
