@@ -142,6 +142,74 @@ class TestSupplierXmlImport(SupplierXmlCommon):
         )
 
     # ------------------------------------------------------------------ #
+    # Supplier creation: contact data / location from the Emisor node
+    # ------------------------------------------------------------------ #
+    def test_new_supplier_gets_contact_data_from_xml(self):
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="CONTACT-1"),
+            company_id=self.env.company.id,
+        )
+        partner = move.partner_id
+        self.assertEqual(partner.email, "proveedor@demo.cr")
+        # phone_validation (si está instalado) puede reformatear el número.
+        self.assertIn("22223333", (partner.phone or "").replace(" ", "").replace("-", ""))
+        self.assertEqual(partner.street, "100m norte del parque")
+        self.assertEqual(partner.country_id.code, "CR")
+        self.assertEqual(partner.company_type, "company")
+
+    def test_new_supplier_person_for_cedula_fisica(self):
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(
+                clave="CONTACT-2", emisor_numero="101110111", emisor_tipo="01"
+            ),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(move.partner_id.company_type, "person")
+
+    def test_existing_supplier_is_not_modified(self):
+        existing = self.env["res.partner"].create(
+            {"name": "Proveedor Ya Existente", "vat": "3101123456", "email": "original@x.cr"}
+        )
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="CONTACT-3"),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(move.partner_id, existing)
+        self.assertEqual(existing.email, "original@x.cr")
+        self.assertEqual(existing.name, "Proveedor Ya Existente")
+
+    def test_location_from_xml_with_einvoice_catalogs(self):
+        if "fp.province" not in self.env or "fp_province_id" not in self.env["res.partner"]._fields:
+            self.skipTest("l10n_cr_einvoice no está instalado en esta base.")
+        province = self.env["fp.province"].search([("code", "=", "1")], limit=1)
+        if not province:
+            province = self.env["fp.province"].create({"code": "1", "name": "San José"})
+        canton = self.env["fp.canton"].search(
+            [("province_id", "=", province.id), ("code", "=", "08")], limit=1
+        )
+        if not canton:
+            canton = self.env["fp.canton"].create(
+                {"code": "08", "name": "Goicoechea", "province_id": province.id}
+            )
+        district = self.env["fp.district"].search(
+            [("canton_id", "=", canton.id), ("code", "=", "02")], limit=1
+        )
+        if not district:
+            district = self.env["fp.district"].create(
+                {"code": "02", "name": "San Francisco", "canton_id": canton.id}
+            )
+
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="LOC-1"),
+            company_id=self.env.company.id,
+        )
+        partner = move.partner_id
+        self.assertEqual(partner.fp_province_id, province)
+        self.assertEqual(partner.fp_canton_id, canton)
+        self.assertEqual(partner.fp_district_id, district)
+        self.assertEqual(partner.city, canton.name)
+
+    # ------------------------------------------------------------------ #
     # Account prediction (per supplier / line detail)
     # ------------------------------------------------------------------ #
     def test_predicted_account_fallback_without_history(self):

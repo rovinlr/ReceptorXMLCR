@@ -1,6 +1,8 @@
 import base64
 import binascii
 import io
+import logging
+import threading
 import zipfile
 from email import policy
 from email.parser import BytesParser
@@ -9,6 +11,8 @@ from markupsafe import Markup
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
 
 
 class AccountMove(models.Model):
@@ -129,7 +133,7 @@ class AccountMove(models.Model):
         if not emisor_vat:
             raise UserError(_("El XML no contiene la identificación del emisor."))
 
-        partner = self._find_or_create_supplier(emisor_name, emisor_vat)
+        partner = self._find_or_create_supplier(emisor_name, emisor_vat, root=root)
         journal = self._get_purchase_journal(journal_id=journal_id, company=company)
 
         lines = self._build_invoice_lines(root, company, partner=partner, warnings=warnings)
@@ -168,18 +172,129 @@ class AccountMove(models.Model):
             raise UserError(_("La cédula del receptor no coincide con la del sistema que recibe."))
 
     @api.model
-    def _find_or_create_supplier(self, name, vat):
+    def _find_or_create_supplier(self, name, vat, root=None):
         partner = self.env["res.partner"].search([("vat", "=", vat)], limit=1)
         if partner:
             return partner
-        return self.env["res.partner"].create(
-            {
-                "name": name or vat,
-                "vat": vat,
-                "supplier_rank": 1,
-                "company_type": "company",
-            }
+        vals = {
+            "name": name or vat,
+            "vat": vat,
+            "supplier_rank": 1,
+            "company_type": "company",
+        }
+        if root is not None:
+            vals.update(self._supplier_vals_from_xml(root))
+        partner = self.env["res.partner"].create(vals)
+        self._enrich_supplier_from_hacienda(partner)
+        return partner
+
+    @api.model
+    def _supplier_vals_from_xml(self, root):
+        """Extra partner values taken from the Emisor node of the XML."""
+        vals = {}
+        partner_model = self.env["res.partner"]
+
+        email = (self._xml_text(root, ["Emisor", "CorreoElectronico"]) or "").strip()
+        if email and "@" in email:
+            vals["email"] = email
+
+        phone_number = self._xml_text(root, ["Emisor", "Telefono", "NumTelefono"])
+        if phone_number:
+            country_code = self._xml_text(root, ["Emisor", "Telefono", "CodigoPais"])
+            vals["phone"] = "+%s %s" % (country_code, phone_number) if country_code else phone_number
+
+        other_address = self._xml_text(root, ["Emisor", "Ubicacion", "OtrasSenas"])
+        if other_address:
+            vals["street"] = other_address
+
+        country = self.env.ref("base.cr", raise_if_not_found=False)
+        if country:
+            vals["country_id"] = country.id
+
+        id_type = (self._xml_text(root, ["Emisor", "Identificacion", "Tipo"]) or "").strip()
+        if id_type:
+            id_type = id_type.zfill(2)
+            if id_type == "01":
+                vals["company_type"] = "person"
+            id_type_field = partner_model._fields.get("fp_identification_type")
+            if id_type_field is not None and isinstance(id_type_field.selection, list):
+                if id_type in dict(id_type_field.selection):
+                    vals["fp_identification_type"] = id_type
+
+        vals.update(self._supplier_location_vals_from_xml(root))
+        return vals
+
+    @api.model
+    def _supplier_location_vals_from_xml(self, root):
+        """Province/canton/district from the XML Ubicacion codes.
+
+        Uses the l10n_cr_einvoice catalogs (fp.province/fp.canton/fp.district)
+        when that module is installed: records are only selected by code, never
+        created. Returns {} when the module or the codes are absent.
+        """
+        partner_model = self.env["res.partner"]
+        if "fp_province_id" not in partner_model._fields or "fp.province" not in self.env:
+            return {}
+
+        province_code = (self._xml_text(root, ["Emisor", "Ubicacion", "Provincia"]) or "").strip()
+        if not province_code:
+            return {}
+        province = self.env["fp.province"].search([("code", "=", province_code)], limit=1)
+        if not province:
+            return {}
+        vals = {"fp_province_id": province.id, "fp_province_code": province.code}
+
+        canton_code = (self._xml_text(root, ["Emisor", "Ubicacion", "Canton"]) or "").strip()
+        if not canton_code:
+            return vals
+        canton = self.env["fp.canton"].search(
+            [
+                ("province_id", "=", province.id),
+                ("code", "in", [canton_code, canton_code.zfill(2)]),
+            ],
+            limit=1,
         )
+        if not canton:
+            return vals
+        vals.update({"fp_canton_id": canton.id, "fp_canton_code": canton.code, "city": canton.name})
+
+        district_code = (self._xml_text(root, ["Emisor", "Ubicacion", "Distrito"]) or "").strip()
+        if not district_code:
+            return vals
+        district = self.env["fp.district"].search(
+            [
+                ("canton_id", "=", canton.id),
+                ("code", "in", [district_code, district_code.zfill(2)]),
+            ],
+            limit=1,
+        )
+        if district:
+            vals.update({"fp_district_id": district.id, "fp_district_code": district.code})
+        return vals
+
+    @api.model
+    def _enrich_supplier_from_hacienda(self, partner):
+        """Complement a newly created supplier with official Hacienda data.
+
+        Delegates to l10n_cr_einvoice's VAT lookup when installed (it fills the
+        official name, identification type and economic activity, and only sets
+        the email when empty, so XML data is preserved). Skipped during tests
+        and never allowed to break the import on network errors.
+        """
+        if not hasattr(partner, "_fp_query_hacienda") or not hasattr(partner, "_fp_apply_hacienda_payload"):
+            return
+        if getattr(threading.current_thread(), "testing", False):
+            return
+        try:
+            data = partner._fp_query_hacienda(partner.vat)
+            if data:
+                partner._fp_apply_hacienda_payload(data)
+        except Exception:  # noqa: BLE001 - enrichment must never abort the import
+            _logger.warning(
+                "No se pudo enriquecer el proveedor %s con datos de Hacienda.",
+                partner.vat,
+                exc_info=True,
+            )
 
     @api.model
     def _get_purchase_journal(self, journal_id=None, company=None):

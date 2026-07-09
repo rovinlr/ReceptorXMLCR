@@ -11,6 +11,10 @@ def factura_xml(
     fecha="2026-06-20T10:00:00-06:00",
     emisor_nombre="Proveedor Demo SA",
     emisor_numero="3101123456",
+    emisor_tipo="02",
+    emisor_email="proveedor@demo.cr",
+    emisor_telefono="22223333",
+    ubicacion=True,
     receptor_numero="3101999999",
     moneda="CRC",
     lineas=None,
@@ -20,13 +24,26 @@ def factura_xml(
     if lineas is None:
         lineas = [linea_detalle()]
     lineas_xml = "".join(lineas)
+    ubicacion_xml = ""
+    if ubicacion:
+        ubicacion_xml = (
+            "<Ubicacion><Provincia>1</Provincia><Canton>08</Canton>"
+            "<Distrito>02</Distrito><OtrasSenas>100m norte del parque</OtrasSenas></Ubicacion>"
+        )
+    telefono_xml = (
+        f"<Telefono><CodigoPais>506</CodigoPais><NumTelefono>{emisor_telefono}</NumTelefono></Telefono>"
+        if emisor_telefono
+        else ""
+    )
+    correo_xml = f"<CorreoElectronico>{emisor_email}</CorreoElectronico>" if emisor_email else ""
     return (
         f'<{root_tag} xmlns="{CR_NS}">'
         f"<Clave>{clave}</Clave>"
         f"<NumeroConsecutivo>{consecutivo}</NumeroConsecutivo>"
         f"<FechaEmision>{fecha}</FechaEmision>"
         f"<Emisor><Nombre>{emisor_nombre}</Nombre>"
-        f"<Identificacion><Tipo>02</Tipo><Numero>{emisor_numero}</Numero></Identificacion></Emisor>"
+        f"<Identificacion><Tipo>{emisor_tipo}</Tipo><Numero>{emisor_numero}</Numero></Identificacion>"
+        f"{ubicacion_xml}{telefono_xml}{correo_xml}</Emisor>"
         f"<Receptor><Nombre>Mi Empresa</Nombre>"
         f"<Identificacion><Tipo>02</Tipo><Numero>{receptor_numero}</Numero></Identificacion></Receptor>"
         f"<DetalleServicio>{lineas_xml}</DetalleServicio>"
