@@ -346,23 +346,39 @@ class AccountMove(models.Model):
 
     @api.model
     def _align_accounting_date(self, move):
-        """Keep the accounting date equal to the XML FechaEmision (invoice_date).
+        """Force the accounting date to the XML FechaEmision (invoice_date).
 
-        Odoo already derives ``date`` from ``invoice_date`` for purchase documents,
-        but we enforce it explicitly to cover every import path (e.g. a move
-        pre-created by the mail alias). ``_get_accounting_date`` is used when
-        available so fiscal lock dates are still honored.
+        Odoo's own compute pushes vendor-bill accounting dates forward (end of
+        the emission month, or today) to keep sequences increasing, so we cannot
+        delegate to ``_get_accounting_date`` unconditionally: Costa Rican
+        practice books the bill on its emission date. Only when the emission
+        date falls in a locked period do we keep Odoo's adjusted date, leaving a
+        note in the chatter.
         """
         if not move.invoice_date or move.state != "draft":
             return
         target = move.invoice_date
-        if hasattr(move, "_get_accounting_date"):
+        locked = False
+        if hasattr(move, "_get_violated_lock_dates"):
             try:
-                target = move._get_accounting_date(move.invoice_date, move._affect_tax_report()) or target
+                has_tax = move._affect_tax_report()
+                if move._get_violated_lock_dates(move.invoice_date, has_tax):
+                    locked = True
+                    target = move._get_accounting_date(move.invoice_date, has_tax) or move.invoice_date
             except Exception:  # noqa: BLE001 - date alignment must never abort the import
+                locked = False
                 target = move.invoice_date
         if move.date != target:
             move.date = target
+        if locked and target != move.invoice_date:
+            move.message_post(
+                body=_(
+                    "La fecha de emisión %(emision)s cae en un período bloqueado; "
+                    "se usó %(fecha)s como fecha contable.",
+                    emision=move.invoice_date,
+                    fecha=target,
+                )
+            )
 
     def _apply_predicted_accounts(self, move):
         """Set each imported line's account from the supplier's history.
