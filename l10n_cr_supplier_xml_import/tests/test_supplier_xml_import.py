@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from lxml import etree
 
+from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import tagged
 
@@ -213,12 +214,30 @@ class TestSupplierXmlImport(SupplierXmlCommon):
     # Accounting date follows the XML FechaEmision
     # ------------------------------------------------------------------ #
     def test_accounting_date_matches_invoice_date(self):
+        # Odoo pushes vendor-bill dates to end-of-month/today for sequences;
+        # the import must force date == FechaEmision instead.
         move = self.move_model.create_from_supplier_xml(
             xml_content=factura_xml(clave="DATE-1"),
             company_id=self.env.company.id,
         )
         self.assertEqual(str(move.invoice_date), "2026-06-20")
         self.assertEqual(move.date, move.invoice_date)
+
+    def test_accounting_date_locked_period_adjusts_and_warns(self):
+        try:
+            self.env.company.fiscalyear_lock_date = "2026-06-30"
+        except Exception:
+            self.skipTest("No se pudo establecer la fecha de bloqueo en esta base de test.")
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="DATE-LOCK-1"),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(str(move.invoice_date), "2026-06-20")
+        self.assertGreater(move.date, fields.Date.to_date("2026-06-30"))
+        self.assertTrue(
+            any("período bloqueado" in (m.body or "") for m in move.message_ids),
+            "Debe avisar en el chatter cuando la fecha de emisión cae en período bloqueado.",
+        )
 
     # ------------------------------------------------------------------ #
     # Account from supplier history / Enterprise prediction
