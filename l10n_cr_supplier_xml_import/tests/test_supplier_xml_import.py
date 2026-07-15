@@ -210,18 +210,78 @@ class TestSupplierXmlImport(SupplierXmlCommon):
         self.assertEqual(partner.city, canton.name)
 
     # ------------------------------------------------------------------ #
-    # Account prediction (per supplier / line detail)
+    # Accounting date follows the XML FechaEmision
     # ------------------------------------------------------------------ #
-    def test_predicted_account_fallback_without_history(self):
-        # A brand-new partner has no history -> the default expense account.
-        partner = self.env["res.partner"].create({"name": "Sin historial"})
-        default = self.move_model._default_expense_account(self.env.company)
-        account = self.move_model._predicted_expense_account(
-            "Servicio de prueba", partner, self.env.company, default
+    def test_accounting_date_matches_invoice_date(self):
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="DATE-1"),
+            company_id=self.env.company.id,
         )
-        self.assertEqual(account, default)
+        self.assertEqual(str(move.invoice_date), "2026-06-20")
+        self.assertEqual(move.date, move.invoice_date)
 
-    def test_predicted_account_is_used_on_import(self):
+    # ------------------------------------------------------------------ #
+    # Account from supplier history / Enterprise prediction
+    # ------------------------------------------------------------------ #
+    def _create_posted_bill(self, partner, account, labels):
+        bill = self.move_model.create(
+            {
+                "move_type": "in_invoice",
+                "partner_id": partner.id,
+                "invoice_date": "2026-05-15",
+                "invoice_line_ids": [
+                    (0, 0, {"name": label, "quantity": 1, "price_unit": 100, "account_id": account.id})
+                    for label in labels
+                ],
+            }
+        )
+        bill.action_post()
+        return bill
+
+    def _history_expense_account(self):
+        return self.env["account.account"].create(
+            {
+                "code": "699998",
+                "name": "Gasto historial (test)",
+                "account_type": "expense",
+            }
+        )
+
+    def test_account_fallback_without_history(self):
+        # A brand-new partner has no history -> the default expense account stays.
+        default = self.move_model._default_expense_account(self.env.company)
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="HIST-0"),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(move.invoice_line_ids.account_id, default)
+
+    def test_account_from_history_same_detail(self):
+        partner = self.env["res.partner"].create({"name": "Proveedor Demo SA", "vat": "3101123456"})
+        history_account = self._history_expense_account()
+        # Same detail text as the XML line ("Servicio de prueba").
+        self._create_posted_bill(partner, history_account, ["Servicio de prueba"])
+
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="HIST-1"),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(move.partner_id, partner)
+        self.assertEqual(move.invoice_line_ids.account_id, history_account)
+
+    def test_account_from_history_most_used(self):
+        partner = self.env["res.partner"].create({"name": "Proveedor Demo SA", "vat": "3101123456"})
+        history_account = self._history_expense_account()
+        # Different labels: no exact-detail match, so the most used account wins.
+        self._create_posted_bill(partner, history_account, ["Alquiler oficina", "Alquiler parqueo"])
+
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="HIST-2"),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(move.invoice_line_ids.account_id, history_account)
+
+    def test_enterprise_prediction_is_used_when_available(self):
         default = self.move_model._default_expense_account(self.env.company)
         other = self.env["account.account"].search(
             [("account_type", "=", "expense"), ("id", "!=", default.id)], limit=1
@@ -229,6 +289,7 @@ class TestSupplierXmlImport(SupplierXmlCommon):
         if not other:
             self.skipTest("Se necesita más de una cuenta de gasto para probar la predicción.")
 
+        # Enterprise's _predict_account takes no arguments and runs on the line.
         line_model_cls = type(self.env["account.move.line"])
         with patch.object(line_model_cls, "_predict_account", create=True, return_value=other.id):
             move = self.move_model.create_from_supplier_xml(
