@@ -395,9 +395,22 @@ class AccountMove(models.Model):
             return self.env["account.account"]
         if isinstance(predicted, int):
             predicted = self.env["account.account"].browse(predicted) if predicted else self.env["account.account"]
-        if predicted and predicted.exists() and not predicted.deprecated:
+        if predicted and predicted.exists() and self._account_is_usable(predicted):
             return predicted
         return self.env["account.account"]
+
+    @api.model
+    def _account_is_usable(self, account):
+        """True when the account is not archived/deprecated.
+
+        account.account uses ``active`` in Odoo 19 and ``deprecated`` in older
+        versions; check whichever field exists.
+        """
+        if "deprecated" in account._fields:
+            return not account.deprecated
+        if "active" in account._fields:
+            return account.active
+        return True
 
     @api.model
     def _account_from_partner_history(self, label, partner, company):
@@ -412,13 +425,17 @@ class AccountMove(models.Model):
             ("move_id.move_type", "in", ("in_invoice", "in_refund")),
             ("parent_state", "=", "posted"),
             ("display_type", "=", "product"),
-            ("account_id.deprecated", "=", False),
             (
                 "account_id.account_type",
                 "not in",
                 ("asset_receivable", "liability_payable", "liquidity", "asset_cash", "equity", "off_balance"),
             ),
         ]
+        account_fields = self.env["account.account"]._fields
+        if "deprecated" in account_fields:
+            domain.append(("account_id.deprecated", "=", False))
+        elif "active" in account_fields:
+            domain.append(("account_id.active", "=", True))
         if label:
             escaped_label = label.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             line = line_model.search(domain + [("name", "=ilike", escaped_label)], order="id desc", limit=1)
