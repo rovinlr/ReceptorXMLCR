@@ -45,6 +45,12 @@ class AccountMove(models.Model):
         except Exception as error:
             raise UserError(_("No se pudo leer el XML adjunto: %s") % error) from error
 
+    def _finalize_supplier_xml_move(self, move, root, warnings):
+        """Post-import steps shared by every entry point (wizard, manual, email)."""
+        self._align_accounting_date(move)
+        self._apply_predicted_accounts(move)
+        self._post_supplier_xml_checks(move, root, warnings)
+
     def _post_supplier_xml_checks(self, move, root, warnings):
         """Post a chatter note when the imported totals/taxes do not match the XML.
 
@@ -101,7 +107,7 @@ class AccountMove(models.Model):
         if supplier_xml_gateway_id:
             vals["supplier_xml_gateway_id"] = supplier_xml_gateway_id
         move = self.with_context(default_move_type=vals["move_type"]).create(vals)
-        self._post_supplier_xml_checks(move, root, warnings)
+        self._finalize_supplier_xml_move(move, root, warnings)
         return move
 
     @api.model
@@ -136,7 +142,7 @@ class AccountMove(models.Model):
         partner = self._find_or_create_supplier(emisor_name, emisor_vat, root=root)
         journal = self._get_purchase_journal(journal_id=journal_id, company=company)
 
-        lines = self._build_invoice_lines(root, company, partner=partner, warnings=warnings)
+        lines = self._build_invoice_lines(root, company, warnings=warnings)
         if not lines:
             raise UserError(_("El XML no tiene líneas de detalle para importar."))
 
@@ -339,30 +345,90 @@ class AccountMove(models.Model):
         return account
 
     @api.model
-    @api.model
-    def _predicted_expense_account(self, label, partner, company, default_account):
-        """Reuse Odoo's account prediction (per supplier + line label).
+    def _align_accounting_date(self, move):
+        """Keep the accounting date equal to the XML FechaEmision (invoice_date).
 
-        Odoo predicts the account only through the Label onchange in the UI, which
-        never fires on programmatic import. We call it explicitly so imported bills
-        land on the account historically used for that supplier/detail, and fall
-        back to the default expense account when there is no history or the API is
-        unavailable. Never let prediction break the import.
+        Odoo already derives ``date`` from ``invoice_date`` for purchase documents,
+        but we enforce it explicitly to cover every import path (e.g. a move
+        pre-created by the mail alias). ``_get_accounting_date`` is used when
+        available so fiscal lock dates are still honored.
         """
-        if not label or not partner:
-            return default_account
-        line_model = self.env["account.move.line"].with_company(company)
-        if not hasattr(line_model, "_predict_account"):
-            return default_account
+        if not move.invoice_date or move.state != "draft":
+            return
+        target = move.invoice_date
+        if hasattr(move, "_get_accounting_date"):
+            try:
+                target = move._get_accounting_date(move.invoice_date, move._affect_tax_report()) or target
+            except Exception:  # noqa: BLE001 - date alignment must never abort the import
+                target = move.invoice_date
+        if move.date != target:
+            move.date = target
+
+    def _apply_predicted_accounts(self, move):
+        """Set each imported line's account from the supplier's history.
+
+        Mirrors l10n_it_edi's import: first Enterprise's predictive-bills method
+        (``line._predict_account()``, no args, only exists with account_accountant
+        installed), then a deterministic history lookup that also works on
+        Community, otherwise the default expense account already set on the line.
+        """
+        if move.state != "draft":
+            return
+        for line in move.invoice_line_ids:
+            if line.display_type != "product" or line.product_id:
+                continue
+            predicted = self._predict_line_account(line)
+            if not predicted:
+                predicted = self._account_from_partner_history(line.name, move.partner_id, move.company_id)
+            if predicted and predicted != line.account_id:
+                line.account_id = predicted
+
+    @api.model
+    def _predict_line_account(self, line):
+        """Enterprise account prediction on an already-created draft line."""
+        if not hasattr(line, "_predict_account"):
+            return self.env["account.account"]
         try:
-            predicted = line_model._predict_account(label, partner)
+            predicted = line._predict_account()
         except Exception:  # noqa: BLE001 - prediction must never abort the import
-            return default_account
+            _logger.warning("Fallo la prediccion de cuenta para la linea %s.", line.id, exc_info=True)
+            return self.env["account.account"]
         if isinstance(predicted, int):
             predicted = self.env["account.account"].browse(predicted) if predicted else self.env["account.account"]
-        if predicted and predicted.exists() and not getattr(predicted, "deprecated", False):
+        if predicted and predicted.exists() and not predicted.deprecated:
             return predicted
-        return default_account
+        return self.env["account.account"]
+
+    @api.model
+    def _account_from_partner_history(self, label, partner, company):
+        """Account used on this supplier's posted bills: same detail first, then
+        the most used one. Works on Community (no Enterprise dependency)."""
+        if not partner:
+            return self.env["account.account"]
+        line_model = self.env["account.move.line"]
+        domain = [
+            ("company_id", "=", company.id),
+            ("partner_id", "=", partner.id),
+            ("move_id.move_type", "in", ("in_invoice", "in_refund")),
+            ("parent_state", "=", "posted"),
+            ("display_type", "=", "product"),
+            ("account_id.deprecated", "=", False),
+            (
+                "account_id.account_type",
+                "not in",
+                ("asset_receivable", "liability_payable", "liquidity", "asset_cash", "equity", "off_balance"),
+            ),
+        ]
+        if label:
+            escaped_label = label.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            line = line_model.search(domain + [("name", "=ilike", escaped_label)], order="id desc", limit=1)
+            if line:
+                return line.account_id
+        groups = line_model._read_group(domain, groupby=["account_id"], aggregates=["__count"])
+        if groups:
+            account, _count = max(groups, key=lambda group: group[1])
+            return account
+        return self.env["account.account"]
 
     @api.model
     def _company_domain(self, model, company):
@@ -373,7 +439,7 @@ class AccountMove(models.Model):
         return []
 
     @api.model
-    def _build_invoice_lines(self, root, company, partner=None, warnings=None):
+    def _build_invoice_lines(self, root, company, warnings=None):
         default_account = self._default_expense_account(company)
         line_cmds = []
         other_charges_tax_ids = self._tax_ids_for_other_charges(company)
@@ -384,13 +450,12 @@ class AccountMove(models.Model):
             price_unit = self._line_net_price_unit(line_node=line_node, quantity=quantity)
 
             tax_ids = self._tax_ids_from_line(line_node, company, warnings=warnings, line_label=detail)
-            account = self._predicted_expense_account(detail, partner, company, default_account)
 
             line_vals = {
                 "name": detail or _("Línea importada desde XML"),
                 "quantity": quantity,
                 "price_unit": price_unit,
-                "account_id": account.id,
+                "account_id": default_account.id,
             }
             if tax_ids:
                 line_vals["tax_ids"] = [(6, 0, tax_ids)]
@@ -794,7 +859,7 @@ class AccountMove(models.Model):
 
                 self.write(self._supplier_xml_move_write_vals(vals, filename=extracted_name or attachment.name))
                 self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (extracted_name or ""))
-                self._post_supplier_xml_checks(self, root, warnings)
+                self._finalize_supplier_xml_move(self, root, warnings)
                 return True
 
         raise UserError(_("No se encontró un XML válido en los adjuntos del documento o del chatter."))
@@ -882,7 +947,7 @@ class AccountMove(models.Model):
                 write_vals["supplier_xml_message_id"] = message_id
             self.write(write_vals)
             self.message_post(body=_("XML de proveedor leído automáticamente desde los adjuntos del correo."))
-            self._post_supplier_xml_checks(self, root, warnings)
+            self._finalize_supplier_xml_move(self, root, warnings)
             return
 
     @api.model
