@@ -43,6 +43,32 @@ class TestSupplierXmlImport(SupplierXmlCommon):
         self.assertEqual(self.move_model._line_net_price_unit(line_node, 2.0), 1000.0)
 
     # ------------------------------------------------------------------ #
+    # Payload sanitizing (mangled BOM / junk before the XML declaration)
+    # ------------------------------------------------------------------ #
+    def test_import_with_mangled_bom_prefix(self):
+        # Real-world case: some providers prepend EF BF BD sequences (a UTF-8
+        # BOM corrupted by a bad encode/decode cycle) before the declaration.
+        payload = b"\xef\xbf\xbd" * 3 + factura_xml(clave="BOM-1")
+        self.assertTrue(self.move_model._is_supported_supplier_xml_payload(payload))
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=payload,
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(move.supplier_xml_key, "BOM-1")
+
+    def test_import_with_real_utf8_bom(self):
+        payload = b"\xef\xbb\xbf" + factura_xml(clave="BOM-2")
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=payload,
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(move.supplier_xml_key, "BOM-2")
+
+    def test_sanitize_keeps_clean_payload(self):
+        payload = factura_xml(clave="BOM-3")
+        self.assertEqual(self.move_model._sanitize_supplier_xml_payload(payload), payload)
+
+    # ------------------------------------------------------------------ #
     # Security: XXE hardening
     # ------------------------------------------------------------------ #
     def test_xxe_entities_not_expanded(self):

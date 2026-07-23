@@ -39,7 +39,33 @@ class AccountMove(models.Model):
         )
 
     @api.model
+    def _sanitize_supplier_xml_payload(self, payload):
+        """Remove junk bytes before the XML content.
+
+        Some providers emit files with a mangled UTF-8 BOM (EF BF BD sequences)
+        or other garbage before the XML declaration, which libxml2 rejects with
+        "Start tag expected". UTF-16 payloads are re-encoded to UTF-8 first so
+        the search for '<' is meaningful.
+        """
+        if not payload or not isinstance(payload, bytes):
+            return payload
+        if payload[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            try:
+                text = payload.decode("utf-16")
+            except UnicodeDecodeError:
+                return payload
+            # Drop the XML declaration: it says UTF-16 but the bytes are now UTF-8.
+            if text.lstrip().startswith("<?xml"):
+                text = text.split("?>", 1)[-1]
+            payload = text.encode("utf-8")
+        index = payload.find(b"<")
+        if index > 0:
+            payload = payload[index:]
+        return payload
+
+    @api.model
     def _parse_supplier_xml_root(self, xml_content):
+        xml_content = self._sanitize_supplier_xml_payload(xml_content)
         try:
             return etree.fromstring(xml_content, parser=self._get_safe_xml_parser())
         except Exception as error:
@@ -756,7 +782,9 @@ class AccountMove(models.Model):
         if not payload:
             return False
         try:
-            xml_root = etree.fromstring(payload, parser=self._get_safe_xml_parser())
+            xml_root = etree.fromstring(
+                self._sanitize_supplier_xml_payload(payload), parser=self._get_safe_xml_parser()
+            )
         except Exception:
             return False
         return etree.QName(xml_root).localname in {"FacturaElectronica", "NotaCreditoElectronica"}
