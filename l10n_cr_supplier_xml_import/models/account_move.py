@@ -11,6 +11,7 @@ from markupsafe import Markup
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
+from odoo.tools import config
 
 _logger = logging.getLogger(__name__)
 
@@ -338,7 +339,9 @@ class AccountMove(models.Model):
         """
         if not hasattr(partner, "_fp_query_hacienda") or not hasattr(partner, "_fp_apply_hacienda_payload"):
             return
-        if getattr(threading.current_thread(), "testing", False):
+        # Never hit the network during tests: the thread flag is not set in every
+        # test runner (e.g. post-install), so also check the test_enable config.
+        if config["test_enable"] or getattr(threading.current_thread(), "testing", False):
             return
         try:
             data = partner._fp_query_hacienda(partner.vat)
@@ -362,7 +365,11 @@ class AccountMove(models.Model):
             )
             if configured_journal_id and configured_journal_id.isdigit():
                 journal = self.env["account.journal"].browse(int(configured_journal_id))
-                if journal.company_id != company or journal.type != "purchase":
+                # sudo for the metadata check: the configured journal is a GLOBAL
+                # parameter and may belong to another company — reading it with
+                # the current user would raise AccessError in multi-company DBs.
+                journal_meta = journal.sudo()
+                if not journal_meta.exists() or journal_meta.company_id != company or journal_meta.type != "purchase":
                     journal = self.env["account.journal"]
         if not journal:
             journal = self.env["account.journal"].search(
