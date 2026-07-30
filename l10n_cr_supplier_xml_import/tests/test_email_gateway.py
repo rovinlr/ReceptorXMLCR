@@ -127,3 +127,52 @@ class TestSupplierEmailGateway(SupplierXmlCommon):
         )
         # The original Message-ID must be preserved (not overwritten by the resend).
         self.assertEqual(move.supplier_xml_message_id, "<resend-1@test>")
+
+    def test_native_alias_duplicate_routes_to_existing_move(self):
+        # Accounting's native email alias pre-creates a draft via message_new.
+        # A resent invoice (same Clave, same supplier) must NOT leave an empty
+        # draft: the message routes to the existing bill instead.
+        move_model = self.env["account.move"]
+        existing = move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="ALIAS-DUP-1"),
+            company_id=self.env.company.id,
+        )
+        moves_before = move_model.search_count([("move_type", "=", "in_invoice")])
+
+        msg_dict = {
+            "subject": "Reenvío de factura",
+            "message_id": "<alias-dup@test>",
+            "attachments": [("f.xml", factura_xml(clave="ALIAS-DUP-1"), "application/xml")],
+        }
+        returned = move_model.message_new(msg_dict, custom_values={"move_type": "in_invoice"})
+
+        self.assertEqual(returned, existing, "Debe devolver la factura existente, no un borrador nuevo.")
+        self.assertEqual(
+            move_model.search_count([("move_type", "=", "in_invoice")]),
+            moves_before,
+            "No debe crearse ningún borrador adicional.",
+        )
+        self.assertTrue(
+            any("en lugar de crear un borrador duplicado" in (m.body or "") for m in existing.message_ids),
+        )
+
+    def test_native_alias_same_clave_other_supplier_still_creates_draft(self):
+        # A reused Clave from a DIFFERENT emisor must not route to the other
+        # supplier's bill: the normal creation path applies.
+        move_model = self.env["account.move"]
+        existing = move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="ALIAS-DUP-2"),
+            company_id=self.env.company.id,
+        )
+        msg_dict = {
+            "subject": "Factura de otro proveedor",
+            "attachments": [
+                (
+                    "f.xml",
+                    factura_xml(clave="ALIAS-DUP-2", emisor_numero="3101777777", emisor_nombre="Otro SA"),
+                    "application/xml",
+                )
+            ],
+        }
+        returned = move_model.message_new(msg_dict, custom_values={"move_type": "in_invoice"})
+        self.assertNotEqual(returned, existing)

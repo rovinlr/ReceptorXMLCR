@@ -1063,7 +1063,51 @@ class AccountMove(models.Model):
             return
 
     @api.model
+    def _find_duplicate_move_for_message(self, msg_dict):
+        """Existing move matching an XML attachment's Clave AND its emisor.
+
+        Used to route a resent invoice email to the already-imported bill
+        instead of creating a new empty draft. Only matches when the XML's
+        emisor VAT equals the existing bill's partner VAT — a reused Clave from
+        a different supplier must NOT be merged.
+        """
+        for _filename, payload in self._extract_xml_attachments_from_message(msg_dict):
+            if not payload:
+                continue
+            try:
+                root = self._parse_supplier_xml_root(payload)
+            except UserError:
+                continue
+            clave = self._xml_text(root, ["Clave"])
+            if not clave:
+                continue
+            existing_move = self._find_existing_supplier_move_by_key(supplier_xml_key=clave)
+            if not existing_move:
+                continue
+            emisor_vat = self._normalize_identification(
+                self._xml_text(root, ["Emisor", "Identificacion", "Numero"])
+            )
+            partner_vat = self._normalize_identification(existing_move.partner_id.vat)
+            if emisor_vat and partner_vat and emisor_vat == partner_vat:
+                return existing_move
+        return self.env["account.move"]
+
+    @api.model
     def message_new(self, msg_dict, custom_values=None):
+        # A resent invoice (XML with an already-imported Clave, same supplier)
+        # must not create a new empty draft: return the existing bill so the
+        # mail gateway posts the message and its attachments onto it instead.
+        duplicate_move = self._find_duplicate_move_for_message(msg_dict)
+        if duplicate_move:
+            duplicate_move.message_post(
+                body=_(
+                    "Correo recibido con un XML ya importado (clave %(clave)s). El mensaje y "
+                    "sus adjuntos se agregaron a esta factura en lugar de crear un borrador "
+                    "duplicado.",
+                    clave=duplicate_move.supplier_xml_key,
+                )
+            )
+            return duplicate_move
         move = super().message_new(msg_dict, custom_values=custom_values)
         move._import_xml_from_message_attachments(msg_dict)
         return move
