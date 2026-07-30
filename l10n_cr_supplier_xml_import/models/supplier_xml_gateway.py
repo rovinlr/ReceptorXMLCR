@@ -316,11 +316,22 @@ class SupplierXMLGateway(models.Model):
             self.message_post(body=body)
             return
 
+        is_existing_duplicate = bool(move.env.context.get("supplier_xml_duplicate"))
+
         if message_id and not move.supplier_xml_message_id:
             move.write({"supplier_xml_message_id": message_id})
 
         self._keep_mail_attachments_on_move(move, msg_dict)
-        move.message_post(body=_("Factura creada automáticamente desde correo: %s") % (msg_dict.get("subject") or ""))
+        if is_existing_duplicate:
+            move.message_post(
+                body=_(
+                    "Correo recibido con un XML ya importado anteriormente (misma clave y mismo "
+                    "proveedor). Los adjuntos del correo se agregaron a esta factura. Asunto: %s"
+                )
+                % (msg_dict.get("subject") or "")
+            )
+        else:
+            move.message_post(body=_("Factura creada automáticamente desde correo: %s") % (msg_dict.get("subject") or ""))
 
     @api.model
     def message_new(self, msg_dict, custom_values=None):

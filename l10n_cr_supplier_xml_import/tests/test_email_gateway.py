@@ -90,3 +90,40 @@ class TestSupplierEmailGateway(SupplierXmlCommon):
         self.gateway._process_supplier_email(msg_dict)
         self.assertEqual(len(self.gateway.move_ids), 1)
         self.assertIn("ya procesado previamente", self._bodies(self.gateway))
+
+    def test_resent_email_same_clave_attaches_to_existing_move(self):
+        # The supplier re-sends the invoice in a NEW email (different
+        # Message-ID): no new move; the email attachments are added to the
+        # existing bill and the chatter explains it.
+        first_msg = {
+            "subject": "Factura original",
+            "message_id": "<resend-1@test>",
+            "attachments": [("f.xml", factura_xml(clave="MAIL-DUP-1"), "application/xml")],
+        }
+        self.gateway._process_supplier_email(first_msg)
+        self.assertEqual(len(self.gateway.move_ids), 1)
+        move = self.gateway.move_ids
+        attachments_before = self.env["ir.attachment"].search_count(
+            [("res_model", "=", "account.move"), ("res_id", "=", move.id)]
+        )
+
+        second_msg = {
+            "subject": "Reenvío factura",
+            "message_id": "<resend-2@test>",
+            "attachments": [("f.xml", factura_xml(clave="MAIL-DUP-1"), "application/xml")],
+        }
+        self.gateway._process_supplier_email(second_msg)
+
+        self.assertEqual(len(self.gateway.move_ids), 1, "No debe crearse una segunda factura.")
+        attachments_after = self.env["ir.attachment"].search_count(
+            [("res_model", "=", "account.move"), ("res_id", "=", move.id)]
+        )
+        self.assertGreater(
+            attachments_after, attachments_before, "Los adjuntos del reenvío deben quedar en la factura."
+        )
+        self.assertTrue(
+            any("ya importado anteriormente" in (m.body or "") for m in move.message_ids),
+            "El chatter debe indicar que el XML ya estaba importado.",
+        )
+        # The original Message-ID must be preserved (not overwritten by the resend).
+        self.assertEqual(move.supplier_xml_message_id, "<resend-1@test>")

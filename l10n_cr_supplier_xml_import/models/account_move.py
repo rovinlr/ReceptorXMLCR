@@ -127,7 +127,14 @@ class AccountMove(models.Model):
             company_id=vals.get("company_id"),
         )
         if existing_move:
-            return existing_move
+            if existing_move.partner_id.id == vals["partner_id"]:
+                # Same Clave and same supplier: it is the same document. The
+                # context flag lets callers (e.g. the mail gateway) know they
+                # should attach to it instead of announcing a new invoice.
+                return existing_move.with_context(supplier_xml_duplicate=True)
+            # Same Clave but a DIFFERENT supplier: never merge documents of
+            # different partners; import separately and leave a loud warning.
+            warnings.append(self._duplicate_clave_warning(existing_move, vals.get("supplier_xml_key")))
         if filename:
             vals["supplier_xml_filename"] = filename
         if supplier_xml_gateway_id:
@@ -135,6 +142,16 @@ class AccountMove(models.Model):
         move = self.with_context(default_move_type=vals["move_type"]).create(vals)
         self._finalize_supplier_xml_move(move, root, warnings)
         return move
+
+    @api.model
+    def _duplicate_clave_warning(self, existing_move, clave):
+        return _(
+            "Ya existe otro documento (%(move)s) con la misma clave %(clave)s pero de otro "
+            "proveedor (%(partner)s). Verifique una posible clave errónea del emisor antes de validar.",
+            move=existing_move.display_name,
+            clave=clave or _("desconocida"),
+            partner=existing_move.partner_id.display_name,
+        )
 
     @api.model
     def _find_existing_supplier_move_by_key(self, supplier_xml_key, company_id=None):
@@ -918,6 +935,21 @@ class AccountMove(models.Model):
                 except UserError:
                     continue
 
+                duplicate_move = self._find_existing_supplier_move_by_key(
+                    supplier_xml_key=vals.get("supplier_xml_key"),
+                    company_id=vals.get("company_id"),
+                )
+                if duplicate_move and duplicate_move != self:
+                    if duplicate_move.partner_id.id == vals["partner_id"]:
+                        raise UserError(
+                            _(
+                                "Este XML (clave %(clave)s) ya está importado en %(move)s.",
+                                clave=vals.get("supplier_xml_key"),
+                                move=duplicate_move.display_name,
+                            )
+                        )
+                    warnings.append(self._duplicate_clave_warning(duplicate_move, vals.get("supplier_xml_key")))
+
                 self.write(self._supplier_xml_move_write_vals(vals, filename=extracted_name or attachment.name))
                 self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (extracted_name or ""))
                 self._finalize_supplier_xml_move(self, root, warnings)
@@ -998,6 +1030,25 @@ class AccountMove(models.Model):
                 )
             except UserError:
                 continue
+
+            duplicate_move = self._find_existing_supplier_move_by_key(
+                supplier_xml_key=vals.get("supplier_xml_key"),
+                company_id=vals.get("company_id"),
+            )
+            if duplicate_move and duplicate_move != self:
+                if duplicate_move.partner_id.id == vals["partner_id"]:
+                    # Same document already imported: keep this draft empty (the
+                    # email attachments stay on it) and point to the existing bill.
+                    self.message_post(
+                        body=_(
+                            "El XML adjunto (clave %(clave)s) ya está importado en %(move)s. "
+                            "Este borrador no se completó para evitar un duplicado.",
+                            clave=vals.get("supplier_xml_key"),
+                            move=duplicate_move.display_name,
+                        )
+                    )
+                    return
+                warnings.append(self._duplicate_clave_warning(duplicate_move, vals.get("supplier_xml_key")))
 
             gateway = self._gateway_from_email_message(msg_dict)
             write_vals = self._supplier_xml_move_write_vals(vals, filename=filename)
