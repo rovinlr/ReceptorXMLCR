@@ -137,9 +137,36 @@ class TestSupplierXmlImport(SupplierXmlCommon):
         first = self.move_model.create_from_supplier_xml(xml_content=xml, company_id=self.env.company.id)
         second = self.move_model.create_from_supplier_xml(xml_content=xml, company_id=self.env.company.id)
         self.assertEqual(first, second)
+        self.assertTrue(second.env.context.get("supplier_xml_duplicate"))
         self.assertEqual(
             self.move_model.search_count([("supplier_xml_key", "=", "UNIQUE-CLAVE-1")]),
             1,
+        )
+
+    def test_duplicate_clave_from_other_supplier_creates_new_move(self):
+        # A different emisor reusing an existing Clave must NOT be merged into
+        # the other supplier's bill: new document + warning.
+        first = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="DUP-CLAVE-2"),
+            company_id=self.env.company.id,
+        )
+        second = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(
+                clave="DUP-CLAVE-2",
+                emisor_numero="3101777777",
+                emisor_nombre="Otro Proveedor SA",
+            ),
+            company_id=self.env.company.id,
+        )
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first.partner_id, second.partner_id)
+        self.assertEqual(
+            self.move_model.search_count([("supplier_xml_key", "=", "DUP-CLAVE-2")]),
+            2,
+        )
+        self.assertTrue(
+            any("misma clave" in (m.body or "") for m in second.message_ids),
+            "Debe advertir que otra factura de otro proveedor tiene la misma clave.",
         )
 
     # ------------------------------------------------------------------ #
