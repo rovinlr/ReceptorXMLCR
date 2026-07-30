@@ -142,9 +142,17 @@ class TestSupplierEmailGateway(SupplierXmlCommon):
         msg_dict = {
             "subject": "Reenvío de factura",
             "message_id": "<alias-dup@test>",
+            "email_from": "proveedor@demo.cr",
+            "from": "proveedor@demo.cr",
             "attachments": [("f.xml", factura_xml(clave="ALIAS-DUP-1"), "application/xml")],
         }
-        returned = move_model.message_new(msg_dict, custom_values={"move_type": "in_invoice"})
+        returned = move_model.message_new(
+            msg_dict,
+            custom_values={
+                "move_type": "in_invoice",
+                "journal_id": self.company_data["default_journal_purchase"].id,
+            },
+        )
 
         self.assertEqual(returned, existing, "Debe devolver la factura existente, no un borrador nuevo.")
         self.assertEqual(
@@ -166,6 +174,8 @@ class TestSupplierEmailGateway(SupplierXmlCommon):
         )
         msg_dict = {
             "subject": "Factura de otro proveedor",
+            "email_from": "otro@proveedor.cr",
+            "from": "otro@proveedor.cr",
             "attachments": [
                 (
                     "f.xml",
@@ -174,5 +184,11 @@ class TestSupplierEmailGateway(SupplierXmlCommon):
                 )
             ],
         }
-        returned = move_model.message_new(msg_dict, custom_values={"move_type": "in_invoice"})
+        returned = move_model.message_new(
+            msg_dict,
+            custom_values={
+                "move_type": "in_invoice",
+                "journal_id": self.company_data["default_journal_purchase"].id,
+            },
+        )
         self.assertNotEqual(returned, existing)

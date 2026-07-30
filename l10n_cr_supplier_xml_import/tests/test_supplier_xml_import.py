@@ -1,7 +1,5 @@
 from unittest.mock import patch
 
-from lxml import etree
-
 from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import tagged
@@ -77,10 +75,8 @@ class TestSupplierXmlImport(SupplierXmlCommon):
             b"<!DOCTYPE FacturaElectronica [ <!ENTITY xxe \"SECRETO\"> ]>"
             b"<FacturaElectronica><Emisor><Nombre>&xxe;</Nombre></Emisor></FacturaElectronica>"
         )
-        # Default parser would expand the entity (proves the attack is real).
-        unsafe = etree.fromstring(payload)
-        self.assertEqual(unsafe.xpath("//*[local-name()='Nombre']")[0].text, "SECRETO")
-
+        # Note: whether the DEFAULT parser expands the entity depends on the
+        # libxml2 version (2.13+ no longer does), so we only assert on ours.
         # Hardened parser must neutralize it (no expansion) or reject the doc.
         try:
             safe = self.move_model._parse_supplier_xml_root(payload)

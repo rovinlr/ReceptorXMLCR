@@ -98,6 +98,17 @@ class SupplierXmlCommon(AccountTestInvoicingCommon):
         super().setUpClass()
         cls.move_model = cls.env["account.move"]
 
+        # Hermetic tests: a real database may carry these GLOBAL parameters
+        # (date filters, default journal of another company) which would
+        # interfere with the assertions. Cleared within the test transaction.
+        icp = cls.env["ir.config_parameter"].sudo()
+        for param in (
+            "l10n_cr_supplier_xml_import.process_emails_from_date",
+            "l10n_cr_supplier_xml_import.process_emails_to_date",
+            "l10n_cr_supplier_xml_import.default_purchase_journal_id",
+        ):
+            icp.set_param(param, False)
+
         # Receiver VAT must match the XML's Receptor number (normalized).
         cls.env.company.vat = "3101999999"
 

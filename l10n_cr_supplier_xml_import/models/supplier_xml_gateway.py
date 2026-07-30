@@ -22,8 +22,10 @@ class SupplierXMLGateway(models.Model):
             "l10n_cr_supplier_xml_import.default_purchase_journal_id"
         )
         if configured_journal_id and configured_journal_id.isdigit():
-            journal = self.env["account.journal"].browse(int(configured_journal_id))
-            if journal and journal.type == "purchase" and journal.company_id == self.env.company:
+            # sudo for the metadata check: the configured journal is a GLOBAL
+            # parameter and may belong to another company (multi-company DBs).
+            journal = self.env["account.journal"].browse(int(configured_journal_id)).sudo()
+            if journal.exists() and journal.type == "purchase" and journal.company_id == self.env.company:
                 return journal.id
         return False
 
@@ -208,7 +210,12 @@ class SupplierXMLGateway(models.Model):
             if not raw_date:
                 continue
 
-            parsed_datetime = fields.Datetime.to_datetime(raw_date)
+            # to_datetime RAISES ValueError on RFC2822 email dates in some Odoo
+            # builds (instead of returning a falsy value) — never let it crash.
+            try:
+                parsed_datetime = fields.Datetime.to_datetime(raw_date)
+            except (TypeError, ValueError):
+                parsed_datetime = False
             if not parsed_datetime and isinstance(raw_date, str):
                 try:
                     parsed_datetime = parsedate_to_datetime(raw_date)
