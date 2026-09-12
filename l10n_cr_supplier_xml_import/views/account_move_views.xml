@@ -16,6 +16,15 @@
                         class="btn-secondary"
                         invisible="move_type not in ('in_invoice', 'in_refund') or state != 'draft'"/>
             </xpath>
+            <xpath expr="//page[@id='other_tab']/group[@id='other_tab_group']" position="inside">
+                <group string="Recepción XML CR" name="supplier_xml_info"
+                       invisible="move_type not in ('in_invoice', 'in_refund')">
+                    <field name="supplier_xml_key" string="Clave"/>
+                    <field name="supplier_xml_reference_key"
+                           invisible="move_type != 'in_refund'"/>
+                    <field name="supplier_xml_filename" string="Archivo XML"/>
+                </group>
+            </xpath>
         </field>
     </record>
 </odoo>

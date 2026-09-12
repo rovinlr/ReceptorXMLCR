@@ -366,6 +366,72 @@ class TestSupplierXmlImport(SupplierXmlCommon):
             )
         self.assertEqual(move.invoice_line_ids.account_id, other)
 
+    # ------------------------------------------------------------------ #
+    # Credit note linking via InformacionReferencia
+    # ------------------------------------------------------------------ #
+    def test_credit_note_links_to_existing_invoice(self):
+        invoice = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="NCLINK-ORIG-1"),
+            company_id=self.env.company.id,
+        )
+        credit_note = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(
+                root_tag="NotaCreditoElectronica",
+                clave="NCLINK-NC-1",
+                referencia="NCLINK-ORIG-1",
+            ),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(credit_note.supplier_xml_reference_key, "NCLINK-ORIG-1")
+        self.assertEqual(credit_note.reversed_entry_id, invoice)
+        self.assertTrue(
+            any("ligada automáticamente" in (m.body or "").lower() for m in invoice.message_ids),
+            "La factura debe tener la nota del enlace en el chatter.",
+        )
+
+    def test_invoice_adopts_orphan_credit_note(self):
+        # The NC arrives BEFORE the invoice (emails out of order).
+        credit_note = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(
+                root_tag="NotaCreditoElectronica",
+                clave="NCLINK-NC-2",
+                referencia="NCLINK-ORIG-2",
+            ),
+            company_id=self.env.company.id,
+        )
+        self.assertFalse(credit_note.reversed_entry_id)
+        self.assertTrue(
+            any("no está importado" in (m.body or "") for m in credit_note.message_ids),
+            "Debe avisar que la factura referenciada no existe todavía.",
+        )
+
+        invoice = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="NCLINK-ORIG-2"),
+            company_id=self.env.company.id,
+        )
+        self.assertEqual(credit_note.reversed_entry_id, invoice)
+
+    def test_credit_note_reference_from_other_supplier_not_linked(self):
+        invoice = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="NCLINK-ORIG-3"),
+            company_id=self.env.company.id,
+        )
+        credit_note = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(
+                root_tag="NotaCreditoElectronica",
+                clave="NCLINK-NC-3",
+                referencia="NCLINK-ORIG-3",
+                emisor_numero="3101777777",
+                emisor_nombre="Otro Proveedor SA",
+            ),
+            company_id=self.env.company.id,
+        )
+        self.assertNotEqual(credit_note.partner_id, invoice.partner_id)
+        self.assertFalse(credit_note.reversed_entry_id, "No debe ligarse a la factura de otro proveedor.")
+        self.assertTrue(
+            any("OTRO proveedor" in (m.body or "") for m in credit_note.message_ids),
+        )
+
     def test_invoice_without_lines_raises(self):
         empty = (
             '<FacturaElectronica xmlns="urn:x">'

@@ -23,6 +23,14 @@ class AccountMove(models.Model):
     supplier_xml_key = fields.Char(readonly=True, copy=False)
     supplier_xml_gateway_id = fields.Many2one("supplier.xml.gateway", readonly=True, copy=False)
     supplier_xml_message_id = fields.Char(readonly=True, copy=False, index=True)
+    supplier_xml_reference_key = fields.Char(
+        string="Clave referenciada",
+        readonly=True,
+        copy=False,
+        index=True,
+        help="Clave del comprobante original declarada en InformacionReferencia "
+        "de una nota de crédito/débito electrónica.",
+    )
 
     @api.model
     def _get_safe_xml_parser(self):
@@ -76,7 +84,89 @@ class AccountMove(models.Model):
         """Post-import steps shared by every entry point (wizard, manual, email)."""
         self._align_accounting_date(move)
         self._apply_predicted_accounts(move)
+        self._link_credit_note_references(move, warnings)
         self._post_supplier_xml_checks(move, root, warnings)
+
+    def _link_credit_note_references(self, move, warnings):
+        """Tie credit notes to their original bill via the referenced Clave.
+
+        Both directions are covered (emails do not always arrive in order):
+        an imported NC looks up its referenced invoice, and an imported invoice
+        adopts orphan NCs that were already referencing its Clave. The link is
+        Odoo's native ``reversed_entry_id`` and is only made between documents
+        of the SAME supplier; it never overwrites an existing link.
+        """
+        move.ensure_one()
+        if move.move_type == "in_refund" and move.supplier_xml_reference_key:
+            original = self._find_existing_supplier_move_by_key(
+                supplier_xml_key=move.supplier_xml_reference_key,
+                company_id=move.company_id.id,
+            )
+            if not original or original == move:
+                warnings.append(
+                    _(
+                        "La nota de crédito referencia la clave %(clave)s, pero ese comprobante "
+                        "no está importado; el vínculo se hará automáticamente si la factura "
+                        "llega después.",
+                        clave=move.supplier_xml_reference_key,
+                    )
+                )
+            elif original.partner_id != move.partner_id:
+                warnings.append(
+                    _(
+                        "La clave referenciada %(clave)s corresponde a %(move)s de OTRO proveedor "
+                        "(%(partner)s); no se ligó. Verifique el XML.",
+                        clave=move.supplier_xml_reference_key,
+                        move=original.display_name,
+                        partner=original.partner_id.display_name,
+                    )
+                )
+            elif not move.reversed_entry_id:
+                move.reversed_entry_id = original.id
+                original.message_post(
+                    body=_(
+                        "Nota de crédito %(move)s ligada automáticamente a esta factura "
+                        "(clave referenciada en el XML).",
+                        move=move.display_name,
+                    )
+                )
+                move.message_post(
+                    body=_(
+                        "Ligada automáticamente a la factura %(move)s (clave referenciada "
+                        "%(clave)s).",
+                        move=original.display_name,
+                        clave=move.supplier_xml_reference_key,
+                    )
+                )
+        elif move.move_type == "in_invoice" and move.supplier_xml_key:
+            orphan_credit_notes = self.search(
+                [
+                    ("move_type", "=", "in_refund"),
+                    ("supplier_xml_reference_key", "=", move.supplier_xml_key),
+                    ("company_id", "=", move.company_id.id),
+                    ("partner_id", "=", move.partner_id.id),
+                    ("reversed_entry_id", "=", False),
+                    ("id", "!=", move.id),
+                ]
+            )
+            if orphan_credit_notes:
+                orphan_credit_notes.write({"reversed_entry_id": move.id})
+                for credit_note in orphan_credit_notes:
+                    credit_note.message_post(
+                        body=_(
+                            "Ligada automáticamente a la factura %(move)s, importada después "
+                            "de esta nota de crédito.",
+                            move=move.display_name,
+                        )
+                    )
+                move.message_post(
+                    body=_(
+                        "Se ligaron automáticamente %(count)s nota(s) de crédito que ya "
+                        "referenciaban la clave de esta factura: %(names)s",
+                        count=len(orphan_credit_notes),
+                        names=", ".join(orphan_credit_notes.mapped("display_name")),
+                    )
+                )
 
     def _post_supplier_xml_checks(self, move, root, warnings):
         """Post a chatter note when the imported totals/taxes do not match the XML.
@@ -199,8 +289,29 @@ class AccountMove(models.Model):
             "ref": self._xml_text(root, ["NumeroConsecutivo"]) or self._xml_text(root, ["Clave"]),
             "invoice_date": self._parse_invoice_date(self._xml_text(root, ["FechaEmision"])),
             "supplier_xml_key": self._xml_text(root, ["Clave"]),
+            "supplier_xml_reference_key": self._reference_key_from_xml(root) if move_type == "in_refund" else False,
             "invoice_line_ids": lines,
         }
+
+    @api.model
+    def _reference_key_from_xml(self, root):
+        """Clave of the referenced document from InformacionReferencia.
+
+        A credit note may carry several reference nodes; prefer the first whose
+        Numero looks like a Hacienda clave (50 digits), else the first non-empty
+        Numero. Tag names are namespace-agnostic, so both v4.4 (TipoDocIR) and
+        older layouts are covered — we only read Numero.
+        """
+        first_number = False
+        for reference_node in root.xpath("./*[local-name()='InformacionReferencia']"):
+            number = (self._xml_text(reference_node, ["Numero"]) or "").strip()
+            if not number:
+                continue
+            if len(number) == 50 and number.isdigit():
+                return number
+            if not first_number:
+                first_number = number
+        return first_number
 
     @api.model
     def _get_move_type_from_xml(self, local_name):
@@ -621,6 +732,7 @@ class AccountMove(models.Model):
             "ref": vals["ref"],
             "invoice_date": vals["invoice_date"],
             "supplier_xml_key": vals["supplier_xml_key"],
+            "supplier_xml_reference_key": vals.get("supplier_xml_reference_key") or False,
             "invoice_line_ids": [(5, 0, 0)] + vals["invoice_line_ids"],
         }
         if filename:
