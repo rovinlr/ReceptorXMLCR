@@ -19,6 +19,7 @@ def factura_xml(
     moneda="CRC",
     lineas=None,
     total_comprobante="2260.00",
+    referencia=None,
 ):
     """Build a Hacienda-like supplier XML (namespaced) for tests."""
     if lineas is None:
@@ -51,7 +52,14 @@ def factura_xml(
         f"<CodigoTipoMoneda><CodigoMoneda>{moneda}</CodigoMoneda></CodigoTipoMoneda>"
         f"<TotalComprobante>{total_comprobante}</TotalComprobante>"
         f"</ResumenFactura>"
-        f"</{root_tag}>"
+        + (
+            f"<InformacionReferencia><TipoDocIR>01</TipoDocIR><Numero>{referencia}</Numero>"
+            f"<FechaEmisionIR>2026-06-01T10:00:00-06:00</FechaEmisionIR>"
+            f"<Codigo>01</Codigo><Razon>Anulación</Razon></InformacionReferencia>"
+            if referencia
+            else ""
+        )
+        + f"</{root_tag}>"
     ).encode("utf-8")
 
 
