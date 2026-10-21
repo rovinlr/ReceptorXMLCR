@@ -8,6 +8,7 @@
         "security/ir.model.access.csv",
         "security/supplier_xml_gateway_rules.xml",
         "wizard/supplier_xml_import_wizard_views.xml",
+        "wizard/supplier_xml_rejected_wizard_views.xml",
         "views/account_move_views.xml",
         "views/res_config_settings_views.xml",
         "views/supplier_xml_gateway_views.xml",

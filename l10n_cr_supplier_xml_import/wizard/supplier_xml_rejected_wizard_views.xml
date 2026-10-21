@@ -1,0 +1,25 @@
+<odoo>
+    <record id="view_supplier_xml_rejected_wizard_form" model="ir.ui.view">
+        <field name="name">supplier.xml.rejected.wizard.form</field>
+        <field name="model">supplier.xml.rejected.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Documento rechazado por Hacienda">
+                <div class="alert alert-danger" role="alert">
+                    <strong>⚠️ Hacienda RECHAZÓ el comprobante del proveedor.</strong>
+                    <p class="mb-0">
+                        El documento <field name="rejected_names" readonly="1" class="fw-bold"/>
+                        tiene estado <strong>Rechazado</strong> según la respuesta de Hacienda.
+                        Un comprobante rechazado no es válido fiscalmente: verifique con el
+                        proveedor antes de continuar.
+                    </p>
+                </div>
+                <field name="move_ids" invisible="1"/>
+                <footer>
+                    <button name="action_confirm_anyway" type="object"
+                            string="Confirmar de todos modos" class="btn-danger"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

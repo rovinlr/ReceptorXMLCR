@@ -1,6 +1,6 @@
 from odoo.tests import tagged
 
-from .common import SupplierXmlCommon, factura_xml
+from .common import SupplierXmlCommon, factura_xml, mensaje_hacienda
 
 
 @tagged("post_install", "-at_install")
@@ -192,3 +192,47 @@ class TestSupplierEmailGateway(SupplierXmlCommon):
             },
         )
         self.assertNotEqual(returned, existing)
+
+    # ------------------------------------------------------------------ #
+    # Hacienda response (MensajeHacienda) state
+    # ------------------------------------------------------------------ #
+    def test_hacienda_response_in_same_email(self):
+        msg_dict = {
+            "subject": "Factura + respuesta",
+            "message_id": "<mh-1@test>",
+            "attachments": [
+                ("factura.xml", factura_xml(clave="MH-CLAVE-1"), "application/xml"),
+                ("respuesta.xml", mensaje_hacienda("MH-CLAVE-1", mensaje="1"), "application/xml"),
+            ],
+        }
+        self.gateway._process_supplier_email(msg_dict)
+        move = self.gateway.move_ids
+        self.assertEqual(len(move), 1)
+        self.assertEqual(move.supplier_xml_hacienda_state, "aceptado")
+
+    def test_hacienda_response_in_later_email(self):
+        first_msg = {
+            "subject": "Factura",
+            "message_id": "<mh-2a@test>",
+            "attachments": [("factura.xml", factura_xml(clave="MH-CLAVE-2"), "application/xml")],
+        }
+        self.gateway._process_supplier_email(first_msg)
+        move = self.gateway.move_ids
+        self.assertFalse(move.supplier_xml_hacienda_state)
+
+        second_msg = {
+            "subject": "Respuesta de Hacienda",
+            "message_id": "<mh-2b@test>",
+            "attachments": [
+                ("respuesta.xml", mensaje_hacienda("MH-CLAVE-2", mensaje="3", detalle="Rechazado por firma inválida"), "application/xml")
+            ],
+        }
+        self.gateway._process_supplier_email(second_msg)
+
+        self.assertEqual(len(self.gateway.move_ids), 1, "La respuesta no debe crear facturas.")
+        self.assertEqual(move.supplier_xml_hacienda_state, "rechazado")
+        self.assertTrue(
+            any("RECHAZÓ" in (m.body or "") for m in move.message_ids),
+            "El chatter debe registrar el rechazo con su detalle.",
+        )
+        self.assertIn("respuesta de Hacienda", self._bodies(self.gateway))

@@ -22,6 +22,9 @@
                     <field name="supplier_xml_key" string="Clave"/>
                     <field name="supplier_xml_reference_key"
                            invisible="move_type != 'in_refund'"/>
+                    <field name="supplier_xml_hacienda_state"
+                           decoration-success="supplier_xml_hacienda_state == 'aceptado'"
+                           decoration-danger="supplier_xml_hacienda_state == 'rechazado'"/>
                     <field name="supplier_xml_filename" string="Archivo XML"/>
                 </group>
             </xpath>
