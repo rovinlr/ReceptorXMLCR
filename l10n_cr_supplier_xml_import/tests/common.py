@@ -100,6 +100,24 @@ def linea_detalle(
     )
 
 
+def mensaje_hacienda(clave, mensaje="1", detalle="Comprobante procesado"):
+    """Hacienda response XML (MensajeHacienda): mensaje 1=aceptado, 3=rechazado."""
+    return (
+        '<MensajeHacienda xmlns="https://cdn.comprobanteselectronicos.go.cr/'
+        'xml-schemas/v4.4/mensajeHacienda">'
+        f"<Clave>{clave}</Clave>"
+        "<NombreEmisor>Proveedor Demo SA</NombreEmisor>"
+        "<TipoIdentificacionEmisor>02</TipoIdentificacionEmisor>"
+        "<NumeroCedulaEmisor>3101123456</NumeroCedulaEmisor>"
+        f"<Mensaje>{mensaje}</Mensaje>"
+        f"<DetalleMensaje>{detalle}</DetalleMensaje>"
+        "<MontoTotalImpuesto>260.00</MontoTotalImpuesto>"
+        "<TotalFactura>2260.00</TotalFactura>"
+        "<NumeroCedulaReceptor>3101999999</NumeroCedulaReceptor>"
+        "</MensajeHacienda>"
+    ).encode("utf-8")
+
+
 class SupplierXmlCommon(AccountTestInvoicingCommon):
     @classmethod
     def setUpClass(cls):

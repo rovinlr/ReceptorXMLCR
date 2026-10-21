@@ -274,8 +274,20 @@ class SupplierXMLGateway(models.Model):
                 )
                 return
 
+        move_model = self.env["account.move"]
+        hacienda_responses = move_model._hacienda_responses_from_message(msg_dict)
+
         xml_attachments = self._get_invoice_xml_attachments(msg_dict.get("attachments", []))
         if not xml_attachments:
+            # The email may still carry Hacienda's response XML for an invoice
+            # imported earlier (suppliers often send it separately).
+            responded_moves = move_model._apply_hacienda_responses(hacienda_responses, company=self.company_id)
+            if responded_moves:
+                self.message_post(
+                    body=_("Correo con respuesta de Hacienda: estado aplicado a %s.")
+                    % ", ".join(responded_moves.mapped("display_name"))
+                )
+                return
             # A supplier may email a plain PDF (not an electronic invoice) with no
             # XML. That is legitimate: do not raise (which would abort/lose the
             # email); just leave a trace and stop.
@@ -321,12 +333,16 @@ class SupplierXMLGateway(models.Model):
                     "No se encontró un XML de factura o nota de crédito válido en el correo."
                 )
             self.message_post(body=body)
+            move_model._apply_hacienda_responses(hacienda_responses, company=self.company_id)
             return
 
         is_existing_duplicate = bool(move.env.context.get("supplier_xml_duplicate"))
 
         if message_id and not move.supplier_xml_message_id:
             move.write({"supplier_xml_message_id": message_id})
+
+        # Hacienda's response often travels in the same email as the invoice.
+        move_model._apply_hacienda_responses(hacienda_responses, company=self.company_id)
 
         self._keep_mail_attachments_on_move(move, msg_dict)
         if is_existing_duplicate:

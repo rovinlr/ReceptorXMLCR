@@ -432,6 +432,34 @@ class TestSupplierXmlImport(SupplierXmlCommon):
             any("OTRO proveedor" in (m.body or "") for m in credit_note.message_ids),
         )
 
+    # ------------------------------------------------------------------ #
+    # Posting guard for Hacienda-rejected documents
+    # ------------------------------------------------------------------ #
+    def test_post_rejected_opens_confirmation_wizard(self):
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="REJ-POST-1"),
+            company_id=self.env.company.id,
+        )
+        move.write({"supplier_xml_hacienda_state": "rechazado"})
+
+        action = move.action_post()
+        self.assertIsInstance(action, dict, "Debe devolver la acción del wizard, no postear.")
+        self.assertEqual(action.get("res_model"), "supplier.xml.rejected.wizard")
+        self.assertEqual(move.state, "draft", "La factura NO debe confirmarse sin pasar por el wizard.")
+
+        wizard = self.env["supplier.xml.rejected.wizard"].create({"move_ids": [(6, 0, move.ids)]})
+        wizard.action_confirm_anyway()
+        self.assertEqual(move.state, "posted", "El wizard debe permitir confirmar de todos modos.")
+
+    def test_post_accepted_posts_normally(self):
+        move = self.move_model.create_from_supplier_xml(
+            xml_content=factura_xml(clave="REJ-POST-2"),
+            company_id=self.env.company.id,
+        )
+        move.write({"supplier_xml_hacienda_state": "aceptado"})
+        move.action_post()
+        self.assertEqual(move.state, "posted")
+
     def test_invoice_without_lines_raises(self):
         empty = (
             '<FacturaElectronica xmlns="urn:x">'

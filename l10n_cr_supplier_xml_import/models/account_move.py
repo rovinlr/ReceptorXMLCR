@@ -31,6 +31,14 @@ class AccountMove(models.Model):
         help="Clave del comprobante original declarada en InformacionReferencia "
         "de una nota de crédito/débito electrónica.",
     )
+    supplier_xml_hacienda_state = fields.Selection(
+        [("aceptado", "Aceptado"), ("rechazado", "Rechazado")],
+        string="Estado en Hacienda",
+        readonly=True,
+        copy=False,
+        help="Estado del comprobante del proveedor según el XML de respuesta de "
+        "Hacienda (MensajeHacienda) adjunto al correo. Vacío = sin respuesta recibida.",
+    )
 
     @api.model
     def _get_safe_xml_parser(self):
@@ -167,6 +175,111 @@ class AccountMove(models.Model):
                         names=", ".join(orphan_credit_notes.mapped("display_name")),
                     )
                 )
+
+    @api.model
+    def _extract_hacienda_response_payloads(self, payload, filename=False):
+        """(clave, state, detail) for every MensajeHacienda found in the payload.
+
+        Suppliers attach Hacienda's response XML next to the invoice (same email
+        or a later one). Handles plain XML and ZIP attachments; Mensaje codes:
+        1 = aceptado, 3 = rechazado (others are ignored).
+        """
+        normalized_payload = self._normalize_attachment_payload(payload)
+        if not normalized_payload:
+            return []
+
+        candidates = [normalized_payload]
+        is_zip_candidate = (filename or "").lower().endswith(".zip") or normalized_payload.startswith(b"PK")
+        if is_zip_candidate:
+            try:
+                with zipfile.ZipFile(io.BytesIO(normalized_payload)) as zip_file:
+                    for member_name in zip_file.namelist():
+                        if member_name.lower().endswith(".xml"):
+                            candidates.append(zip_file.read(member_name))
+            except (zipfile.BadZipFile, RuntimeError, ValueError):
+                pass
+
+        responses = []
+        for candidate in candidates:
+            try:
+                root = etree.fromstring(
+                    self._sanitize_supplier_xml_payload(candidate), parser=self._get_safe_xml_parser()
+                )
+            except Exception:
+                continue
+            if etree.QName(root).localname != "MensajeHacienda":
+                continue
+            clave = (self._xml_text(root, ["Clave"]) or "").strip()
+            state = {"1": "aceptado", "3": "rechazado"}.get((self._xml_text(root, ["Mensaje"]) or "").strip())
+            if clave and state:
+                responses.append((clave, state, self._xml_text(root, ["DetalleMensaje"]) or ""))
+        return responses
+
+    @api.model
+    def _hacienda_responses_from_message(self, msg_dict):
+        """Collect Hacienda responses from every attachment of an email msg_dict."""
+        responses = []
+        for attachment in msg_dict.get("attachments", []):
+            filename = False
+            payload = b""
+            if isinstance(attachment, dict):
+                filename = attachment.get("filename") or attachment.get("fname")
+                payload = attachment.get("content") or attachment.get("payload") or b""
+            elif isinstance(attachment, (list, tuple)) and len(attachment) >= 2:
+                filename, payload = attachment[0], attachment[1]
+            responses.extend(self._extract_hacienda_response_payloads(payload, filename=filename))
+        return responses
+
+    @api.model
+    def _apply_hacienda_responses(self, responses, company=None):
+        """Write the Hacienda state onto the moves matching each response's Clave.
+
+        Idempotent (no rewrite/chatter when the state is unchanged). Returns the
+        moves that were updated.
+        """
+        updated_moves = self.env["account.move"]
+        for clave, state, detail in responses:
+            move = self._find_existing_supplier_move_by_key(
+                supplier_xml_key=clave,
+                company_id=company.id if company else None,
+            )
+            if not move or move.supplier_xml_hacienda_state == state:
+                continue
+            move.write({"supplier_xml_hacienda_state": state})
+            if state == "aceptado":
+                body = _("Hacienda ACEPTÓ el comprobante del proveedor (clave %(clave)s).", clave=clave)
+            else:
+                body = _(
+                    "⚠️ Hacienda RECHAZÓ el comprobante del proveedor (clave %(clave)s). "
+                    "Verifique con el proveedor antes de confirmar la factura.",
+                    clave=clave,
+                )
+            if detail:
+                body = Markup("<p>%s</p><p><em>%s</em></p>") % (body, detail)
+            move.message_post(body=body)
+            updated_moves |= move
+        return updated_moves
+
+    def action_post(self):
+        """Warn before posting a vendor document that Hacienda rejected."""
+        if not self.env.context.get("supplier_xml_skip_rejected_check"):
+            rejected_moves = self.filtered(
+                lambda move: move.move_type in ("in_invoice", "in_refund")
+                and move.supplier_xml_hacienda_state == "rechazado"
+            )
+            if rejected_moves:
+                return {
+                    "type": "ir.actions.act_window",
+                    "name": _("Documento rechazado por Hacienda"),
+                    "res_model": "supplier.xml.rejected.wizard",
+                    "view_mode": "form",
+                    "target": "new",
+                    "context": {
+                        "default_move_ids": [(6, 0, self.ids)],
+                        "default_rejected_names": ", ".join(rejected_moves.mapped("display_name")),
+                    },
+                }
+        return super().action_post()
 
     def _post_supplier_xml_checks(self, move, root, warnings):
         """Post a chatter note when the imported totals/taxes do not match the XML.
@@ -1037,6 +1150,17 @@ class AccountMove(models.Model):
         if not attachments:
             raise UserError(_("No hay adjuntos en este documento o en su chatter."))
 
+        # First pass: apply any Hacienda response XML (MensajeHacienda) found in
+        # the attachments — it may refer to this move or to another one.
+        hacienda_responses = []
+        for attachment in attachments:
+            hacienda_responses.extend(
+                self._extract_hacienda_response_payloads(
+                    self._attachment_raw_payload(attachment), filename=attachment.name
+                )
+            )
+        responded_moves = self._apply_hacienda_responses(hacienda_responses, company=self.company_id)
+
         for attachment in attachments:
             payload = self._attachment_raw_payload(attachment)
             xml_payloads = self._extract_supported_xml_payloads(payload, filename=attachment.name)
@@ -1073,6 +1197,15 @@ class AccountMove(models.Model):
                 self.message_post(body=_("XML leído manualmente desde el adjunto: %s") % (extracted_name or ""))
                 self._finalize_supplier_xml_move(self, root, warnings)
                 return True
+
+        if responded_moves:
+            # No invoice XML, but a Hacienda response was applied: that is a
+            # valid outcome — raising here would roll the state write back.
+            self.message_post(
+                body=_("Respuesta de Hacienda aplicada a: %s.")
+                % ", ".join(responded_moves.mapped("display_name"))
+            )
+            return True
 
         raise UserError(_("No se encontró un XML válido en los adjuntos del documento o del chatter."))
 
@@ -1123,6 +1256,10 @@ class AccountMove(models.Model):
         self.ensure_one()
         if self.move_type not in ("in_invoice", "in_refund"):
             return
+        # Hacienda responses apply regardless of the draft guards below — the
+        # email may only carry the response for an already-imported bill.
+        hacienda_responses = self._hacienda_responses_from_message(msg_dict)
+        self._apply_hacienda_responses(hacienda_responses, company=self.company_id)
         # Avoid wiping a bill that was already imported or manually edited: only
         # auto-import on a still-draft document that has not been filled from XML yet.
         if self.state != "draft" or self.supplier_xml_key:
@@ -1179,6 +1316,9 @@ class AccountMove(models.Model):
             self.write(write_vals)
             self.message_post(body=_("XML de proveedor leído automáticamente desde los adjuntos del correo."))
             self._finalize_supplier_xml_move(self, root, warnings)
+            # Re-apply: a response travelling WITH the invoice matches only now
+            # that this move carries its supplier_xml_key.
+            self._apply_hacienda_responses(hacienda_responses, company=self.company_id)
             return
 
     @api.model
