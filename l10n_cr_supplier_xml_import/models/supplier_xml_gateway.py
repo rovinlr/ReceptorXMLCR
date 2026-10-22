@@ -36,7 +36,7 @@ class SupplierXMLGateway(models.Model):
         help="Diario usado para las facturas importadas automáticamente desde correo.",
     )
     move_ids = fields.One2many("account.move", "supplier_xml_gateway_id", string="Facturas recibidas")
-    move_count = fields.Integer(compute="_compute_move_count", string="Facturas recibidas")
+    move_count = fields.Integer(compute="_compute_move_count", string="Cantidad de facturas")
 
     @api.model
     def _normalize_config_datetime(self, value):
