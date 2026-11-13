@@ -1,0 +1,5 @@
+id,name,model_id,group_id/id,operation,domain
+access_supplier_xml_import_wizard_user,supplier.xml.import.wizard.user,supplier.xml.import.wizard,account.group_account_user,crud,
+access_supplier_xml_gateway_manager,supplier.xml.gateway.manager,supplier.xml.gateway,account.group_account_manager,crud,
+supplier_xml_gateway_company_rule,Buzón XML proveedor: multi-compañía,supplier.xml.gateway,,crud,"['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]"
+access_supplier_xml_rejected_wizard_user,supplier.xml.rejected.wizard.user,supplier.xml.rejected.wizard,account.group_account_user,crud,

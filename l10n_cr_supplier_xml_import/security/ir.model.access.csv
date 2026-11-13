@@ -1,4 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_supplier_xml_import_wizard_user,supplier.xml.import.wizard.user,model_supplier_xml_import_wizard,account.group_account_user,1,1,1,1
-access_supplier_xml_gateway_manager,supplier.xml.gateway.manager,model_supplier_xml_gateway,account.group_account_manager,1,1,1,1
-access_supplier_xml_rejected_wizard_user,supplier.xml.rejected.wizard.user,model_supplier_xml_rejected_wizard,account.group_account_user,1,1,1,1
