@@ -23,7 +23,7 @@
                         <button name="action_view_received_moves"
                                 type="object"
                                 class="oe_stat_button"
-                                icon="fa-file-text-o">
+                                icon="article">
                             <field name="move_count" string="Facturas" widget="statinfo"/>
                         </button>
                     </div>
