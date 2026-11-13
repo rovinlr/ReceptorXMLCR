@@ -1,6 +1,6 @@
 {
     "name": "Costa Rica Supplier XML Import",
-    "version": "19.0.1.1.1",
+    "version": "19.0.1.1.2",
     "summary": "Import supplier XML invoices and credit notes into vendor bills",
     "author": "FenixCR Solutions",
     "depends": ["account", "mail"],
@@ -13,7 +13,7 @@
         "views/res_config_settings_views.xml",
         "views/supplier_xml_gateway_views.xml",
     ],
-    "license": "LGPL-3",
+    "license": "OPL-1",
     "images": ["static/description/xml_import_banner.svg"],
     "application": False,
 }
